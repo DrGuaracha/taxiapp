@@ -38,11 +38,27 @@ export default function App() {
   const [turnoConductor, setTurnoConductor] = useState('Día')
   const [vehiculoConductorSel, setVehiculoConductorSel] = useState('')
 
-  // Producido con fecha personalizable
+  // Estado Modal Edición de Conductor
+  const [editandoConductor, setEditandoConductor] = useState(null)
+  const [editCondNombre, setEditCondNombre] = useState('')
+  const [editCondTelefono, setEditCondTelefono] = useState('')
+  const [editCondTurno, setEditCondTurno] = useState('Día')
+  const [editCondVehiculoId, setEditCondVehiculoId] = useState('')
+
+  // Producido con fecha personalizable y opción Pico y Placa
   const [vehiculoSeleccionado, setVehiculoSeleccionado] = useState('')
   const [monto, setMonto] = useState('')
   const [fechaProducido, setFechaProducido] = useState(new Date().toISOString().split('T')[0])
   const [observaciones, setObservaciones] = useState('')
+  const [esPicoYPlaca, setEsPicoYPlaca] = useState(false)
+
+  // Estado Modal Edición de Producido
+  const [editandoProducido, setEditandoProducido] = useState(null)
+  const [editProdVehiculoId, setEditProdVehiculoId] = useState('')
+  const [editProdMonto, setEditProdMonto] = useState('')
+  const [editProdFecha, setEditProdFecha] = useState('')
+  const [editProdObs, setEditProdObs] = useState('')
+  const [editProdEsPicoYPlaca, setEditProdEsPicoYPlaca] = useState(false)
 
   // Gasto / Mantenimiento con fecha personalizable
   const [vehiculoGastoSeleccionado, setVehiculoGastoSeleccionado] = useState('')
@@ -50,6 +66,18 @@ export default function App() {
   const [fechaGasto, setFechaGasto] = useState(new Date().toISOString().split('T')[0])
   const [categoriaGasto, setCategoriaGasto] = useState('Cambio de Aceite')
   const [obsGasto, setObsGasto] = useState('')
+
+  // Estado Modal Edición de Mantenimiento / Gasto
+  const [editandoGasto, setEditandoGasto] = useState(null)
+  const [editVehiculoId, setEditVehiculoId] = useState('')
+  const [editMonto, setEditMonto] = useState('')
+  const [editFecha, setEditFecha] = useState('')
+  const [editCategoria, setEditCategoria] = useState('')
+  const [editObs, setEditObs] = useState('')
+
+  // Estado para el Calendario de Producidos (Año y Mes actual)
+  const [fechaCalendario, setFechaCalendario] = useState(new Date())
+  const [diaSeleccionadoModal, setDiaSeleccionadoModal] = useState(null)
 
   // Filtros para el historial de mantenimientos
   const [filtroMantenimientoTexto, setFiltroMantenimientoTexto] = useState('')
@@ -87,7 +115,6 @@ export default function App() {
     }
   }, [session])
 
-  // Guardar preferencia de modo oscuro
   function toggleDarkMode() {
     const nuevoModo = !darkMode
     setDarkMode(nuevoModo)
@@ -234,6 +261,39 @@ export default function App() {
     }
   }
 
+  // ABRIR MODAL EDICIÓN CONDUCTOR
+  function abrirEdicionConductor(c) {
+    setEditandoConductor(c)
+    setEditCondNombre(c.nombre)
+    setEditCondTelefono(c.telefono || '')
+    setEditCondTurno(c.turno || 'Día')
+    setEditCondVehiculoId(c.vehiculo_id || '')
+  }
+
+  // GUARDAR EDICIÓN CONDUCTOR
+  async function guardarEdicionConductor(e) {
+    e.preventDefault()
+    if (!editandoConductor) return
+
+    const { error } = await supabase
+      .from('conductores')
+      .update({
+        nombre: editCondNombre,
+        telefono: editCondTelefono,
+        turno: editCondTurno,
+        vehiculo_id: editCondVehiculoId || null
+      })
+      .eq('id', editandoConductor.id)
+
+    if (error) {
+      alert('Error actualizando conductor: ' + error.message)
+    } else {
+      alert('¡Conductor actualizado correctamente!')
+      setEditandoConductor(null)
+      obtenerDatos()
+    }
+  }
+
   async function eliminarConductor(id, nombre) {
     if (!confirm(`¿Estás seguro de eliminar al conductor ${nombre}?`)) return
 
@@ -245,21 +305,102 @@ export default function App() {
 
   async function registrarProducido(e) {
     e.preventDefault()
-    if (!vehiculoSeleccionado || !monto) return alert('Selecciona un taxi y el monto')
+    if (!vehiculoSeleccionado) return alert('Selecciona un taxi')
+    if (!esPicoYPlaca && (!monto || Number(monto) < 0)) return alert('Ingresa un monto válido o selecciona Pico y Placa')
+
+    const { data: existente, error: errConsulta } = await supabase
+      .from('transacciones')
+      .select('id, monto, observaciones')
+      .eq('vehiculo_id', vehiculoSeleccionado)
+      .eq('tipo_movimiento', 'producido')
+      .eq('fecha', fechaProducido)
+
+    if (errConsulta) {
+      alert('Error verificando duplicados: ' + errConsulta.message)
+      return
+    }
+
+    const vehiculoObj = vehiculos.find(v => v.id === Number(vehiculoSeleccionado) || v.id === vehiculoSeleccionado)
+    const placaTexto = vehiculoObj ? vehiculoObj.placa : 'este taxi'
+
+    if (existente && existente.length > 0) {
+      alert(`⚠️ ADVERTENCIA: Ya existe un registro para la placa ${placaTexto} en la fecha ${fechaProducido}.\n\nNo se puede registrar doble vez.`)
+      return
+    }
+
+    const montoFinal = esPicoYPlaca ? 0 : Number(monto)
+    const obsFinal = esPicoYPlaca 
+      ? (observaciones ? `Pico y Placa - ${observaciones}` : 'Pico y Placa') 
+      : observaciones
 
     const { error } = await supabase.from('transacciones').insert([{
       vehiculo_id: vehiculoSeleccionado,
       tipo_movimiento: 'producido',
-      monto: Number(monto),
+      monto: montoFinal,
       fecha: fechaProducido,
       estado_pago: 'Pagado',
-      observaciones
+      observaciones: obsFinal
     }])
 
     if (error) alert('Error: ' + error.message)
     else {
       setMonto('')
       setObservaciones('')
+      setEsPicoYPlaca(false)
+      obtenerDatos()
+      alert(esPicoYPlaca ? '¡Pico y Placa registrado con éxito!' : '¡Producido registrado con éxito!')
+    }
+  }
+
+  function abrirEdicionProducido(item) {
+    setEditandoProducido(item)
+    setEditProdVehiculoId(item.vehiculo_id)
+    setEditProdMonto(item.monto)
+    setEditProdFecha(item.fecha)
+    const esPyP = (item.observaciones || '').toLowerCase().includes('pico y placa')
+    setEditProdEsPicoYPlaca(esPyP)
+    setEditProdObs(item.observaciones ? item.observaciones.replace(/^Pico y Placa\s*-\s*/i, '').replace(/^Pico y Placa$/i, '') : '')
+  }
+
+  async function guardarEdicionProducido(e) {
+    e.preventDefault()
+    if (!editandoProducido) return
+
+    const montoFinal = editProdEsPicoYPlaca ? 0 : Number(editProdMonto)
+    const obsFinal = editProdEsPicoYPlaca 
+      ? (editProdObs ? `Pico y Placa - ${editProdObs}` : 'Pico y Placa') 
+      : editProdObs
+
+    const { error } = await supabase
+      .from('transacciones')
+      .update({
+        vehiculo_id: editProdVehiculoId,
+        monto: montoFinal,
+        fecha: editProdFecha,
+        observaciones: obsFinal
+      })
+      .eq('id', editandoProducido.id)
+
+    if (error) {
+      alert('Error al actualizar producido: ' + error.message)
+    } else {
+      alert('¡Producido actualizado correctamente!')
+      setEditandoProducido(null)
+      setDiaSeleccionadoModal(null)
+      obtenerDatos()
+    }
+  }
+
+  async function eliminarProducido(id, placa) {
+    if (!confirm(`¿Estás seguro de eliminar el registro de producido para la placa ${placa}?`)) return
+
+    const { error } = await supabase.from('transacciones').delete().eq('id', id)
+
+    if (error) {
+      alert('Error al eliminar producido: ' + error.message)
+    } else {
+      alert('Registro eliminado correctamente')
+      setDiaSeleccionadoModal(null)
       obtenerDatos()
     }
   }
@@ -281,6 +422,51 @@ export default function App() {
     else {
       setMontoGasto('')
       setObsGasto('')
+      obtenerDatos()
+    }
+  }
+
+  function abrirEdicionMantenimiento(item) {
+    setEditandoGasto(item)
+    setEditVehiculoId(item.vehiculo_id)
+    setEditMonto(item.monto)
+    setEditFecha(item.fecha)
+    setEditCategoria(item.categoria_gasto || 'Cambio de Aceite')
+    setEditObs(item.observaciones || '')
+  }
+
+  async function guardarEdicionMantenimiento(e) {
+    e.preventDefault()
+    if (!editandoGasto) return
+
+    const { error } = await supabase
+      .from('transacciones')
+      .update({
+        vehiculo_id: editVehiculoId,
+        monto: Number(editMonto),
+        fecha: editFecha,
+        categoria_gasto: editCategoria,
+        observaciones: editObs
+      })
+      .eq('id', editandoGasto.id)
+
+    if (error) {
+      alert('Error al actualizar mantenimiento: ' + error.message)
+    } else {
+      alert('¡Mantenimiento actualizado correctamente!')
+      setEditandoGasto(null)
+      obtenerDatos()
+    }
+  }
+
+  async function eliminarMantenimiento(id) {
+    if (!confirm('¿Estás seguro de eliminar este registro de mantenimiento / gasto?')) return
+
+    const { error } = await supabase.from('transacciones').delete().eq('id', id)
+
+    if (error) {
+      alert('Error al eliminar el mantenimiento: ' + error.message)
+    } else {
       obtenerDatos()
     }
   }
@@ -363,10 +549,25 @@ export default function App() {
     }
   })
 
-  const producidosPorFecha = transacciones
+  // Funciones de ayuda para el Calendario
+  const nombresMeses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+
+  function cambiarMesCalendario(direccion) {
+    const nuevaFecha = new Date(fechaCalendario)
+    nuevaFecha.setMonth(nuevaFecha.getMonth() + direccion)
+    setFechaCalendario(nuevaFecha)
+  }
+
+  const añoActualCal = fechaCalendario.getFullYear()
+  const mesActualCal = fechaCalendario.getMonth()
+  const primerDiaMes = new Date(añoActualCal, mesActualCal, 1).getDay()
+  const primerDiaAjustado = primerDiaMes === 0 ? 6 : primerDiaMes - 1
+  const totalDiasMes = new Date(añoActualCal, mesActualCal + 1, 0).getDate()
+
+  const producidosPorFechaMap = transacciones
     .filter(t => t.tipo_movimiento === 'producido')
     .reduce((acc, curr) => {
-      const f = curr.fecha || 'Sin Fecha'
+      const f = curr.fecha
       if (!acc[f]) acc[f] = []
       acc[f].push(curr)
       return acc
@@ -397,6 +598,13 @@ export default function App() {
     return true
   })
 
+  // Calcular el total invertido en mantenimientos en el mes actual
+  const hoyStr = new Date().toISOString().split('T')[0]
+  const mesActualStr = hoyStr.substring(0, 7)
+  const totalMantenimientosMes = transacciones
+    .filter(t => t.tipo_movimiento === 'gasto' && t.fecha && t.fecha.startsWith(mesActualStr))
+    .reduce((acc, curr) => acc + Number(curr.monto), 0)
+
   const mantenimientosPorFecha = mantenimientosFiltrados.reduce((acc, curr) => {
     const f = curr.fecha || 'Sin Fecha'
     if (!acc[f]) acc[f] = []
@@ -409,7 +617,6 @@ export default function App() {
   const usuarioNombre = session.user?.user_metadata?.full_name || session.user?.email?.split('@')[0]
   const usuarioAvatar = session.user?.user_metadata?.avatar_url
 
-  // Clases dinámicas según modo oscuro / claro
   const bgMain = darkMode ? 'bg-gray-950 text-gray-100' : 'bg-gray-100 text-gray-900'
   const bgCard = darkMode ? 'bg-gray-900 border-gray-800 text-gray-100' : 'bg-white border-gray-200 text-gray-900'
   const textMuted = darkMode ? 'text-gray-400' : 'text-gray-500'
@@ -442,7 +649,6 @@ export default function App() {
         </div>
 
         <div className="flex items-center space-x-2">
-          {/* BOTÓN MODO OSCURO / CLARO */}
           <button
             onClick={toggleDarkMode}
             className="bg-gray-900 text-yellow-400 hover:bg-gray-800 p-2.5 rounded-lg text-xs font-bold transition shadow"
@@ -608,14 +814,29 @@ export default function App() {
                     ))}
                   </select>
 
+                  <label className={`flex items-center space-x-2 p-2.5 rounded-lg border cursor-pointer transition ${esPicoYPlaca ? 'bg-blue-900/40 border-blue-500 text-blue-300' : (darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200')}`}>
+                    <input
+                      type="checkbox"
+                      checked={esPicoYPlaca}
+                      onChange={(e) => {
+                        setEsPicoYPlaca(e.target.checked)
+                        if (e.target.checked) setMonto('0')
+                        else setMonto('')
+                      }}
+                      className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
+                    />
+                    <span className="text-xs font-bold">🚘 Es Pico y Placa (Producido $0)</span>
+                  </label>
+
                   <div className="grid grid-cols-2 gap-2">
                     <input
                       type="number"
                       placeholder="Monto (ej: 120000)"
                       value={monto}
+                      disabled={esPicoYPlaca}
                       onChange={(e) => setMonto(e.target.value)}
-                      className={inputClass}
-                      required
+                      className={`${inputClass} ${esPicoYPlaca ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      required={!esPicoYPlaca}
                     />
                     <input
                       type="date"
@@ -628,7 +849,7 @@ export default function App() {
 
                   <input
                     type="text"
-                    placeholder="Obs: Turno día / Noche"
+                    placeholder={esPicoYPlaca ? "Obs opcional (ej: Restricción todo el día)" : "Obs: Turno día / Noche"}
                     value={observaciones}
                     onChange={(e) => setObservaciones(e.target.value)}
                     className={inputClass}
@@ -636,9 +857,9 @@ export default function App() {
 
                   <button
                     type="submit"
-                    className="w-full bg-green-500 hover:bg-green-600 text-white font-bold p-2.5 rounded-lg text-sm transition"
+                    className={`w-full font-bold p-2.5 rounded-lg text-sm transition text-white ${esPicoYPlaca ? 'bg-blue-600 hover:bg-blue-700' : 'bg-green-500 hover:bg-green-600'}`}
                   >
-                    Guardar Producido
+                    {esPicoYPlaca ? 'Guardar Pico y Placa ($0)' : 'Guardar Producido'}
                   </button>
                 </form>
               </div>
@@ -737,43 +958,128 @@ export default function App() {
               )}
             </div>
 
-            <div className={`p-6 rounded-xl shadow ${bgCard}`}>
-              <h2 className="text-lg font-bold mb-4">📅 Conteo de Producidos Día a Día</h2>
-              {Object.keys(producidosPorFecha).length === 0 ? (
-                <p className={`text-sm ${textMuted}`}>No hay producidos registrados aún.</p>
-              ) : (
-                <div className="space-y-4 max-h-80 overflow-y-auto">
-                  {Object.entries(producidosPorFecha).map(([fecha, lista]) => {
-                    const totalDia = lista.reduce((a, c) => a + Number(c.monto), 0)
-                    return (
-                      <div key={fecha} className={`border rounded-xl p-4 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50'}`}>
-                        <div className="flex justify-between items-center border-b pb-2 mb-3">
-                          <span className="font-extrabold text-sm">📆 Fecha: {fecha}</span>
-                          <span className="bg-green-900/50 text-green-300 font-black text-sm px-3 py-1 rounded-full border border-green-700">
-                            Total Producido: ${totalDia.toLocaleString()}
-                          </span>
-                        </div>
-                        <div className="space-y-2">
-                          {lista.map((item) => (
-                            <div key={item.id} className={rowClass}>
-                              <span className="font-bold">Placa: {item.vehiculos?.placa || 'N/A'}</span>
-                              <span className={textMuted}>{item.observaciones || 'Sin notas'}</span>
-                              <span className="font-bold text-green-400">+${Number(item.monto).toLocaleString()}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )
-                  })}
+            {/* CALENDARIO DE PRODUCIDOS DÍA A DÍA */}
+            <div className={`p-6 rounded-xl shadow border-t-4 border-green-500 ${bgCard}`}>
+              <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-3">
+                <h2 className="text-lg font-bold">📅 Calendario de Producción Diaria</h2>
+                <div className="flex items-center space-x-3">
+                  <button
+                    onClick={() => cambiarMesCalendario(-1)}
+                    className="px-3 py-1.5 rounded-lg bg-gray-800 text-yellow-400 font-bold hover:bg-gray-700 text-xs transition"
+                  >
+                    ◀ Mes Anterior
+                  </button>
+                  <span className="font-black text-sm uppercase tracking-wider">
+                    {nombresMeses[mesActualCal]} {añoActualCal}
+                  </span>
+                  <button
+                    onClick={() => cambiarMesCalendario(1)}
+                    className="px-3 py-1.5 rounded-lg bg-gray-800 text-yellow-400 font-bold hover:bg-gray-700 text-xs transition"
+                  >
+                    Mes Siguiente ▶
+                  </button>
                 </div>
-              )}
+              </div>
+
+              {/* Leyenda */}
+              <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 mb-4 text-xs font-semibold">
+                <div className="flex items-center space-x-2">
+                  <span className="w-3 h-3 rounded-full bg-green-500 inline-block shadow"></span>
+                  <span>Trabajado</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="w-3 h-3 rounded-full bg-blue-500 inline-block shadow"></span>
+                  <span>Pico y Placa</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="w-3 h-3 rounded-full bg-red-500 inline-block shadow"></span>
+                  <span>Sin Trabajar / Sin registro</span>
+                </div>
+              </div>
+
+              {/* Cuadrícula de Días de la Semana */}
+              <div className="grid grid-cols-7 gap-2 text-center mb-2 font-bold text-xs">
+                <span className={textMuted}>Lun</span>
+                <span className={textMuted}>Mar</span>
+                <span className={textMuted}>Mié</span>
+                <span className={textMuted}>Jue</span>
+                <span className={textMuted}>Vie</span>
+                <span className={textMuted}>Sáb</span>
+                <span className={textMuted}>Dom</span>
+              </div>
+
+              {/* Días del Mes */}
+              <div className="grid grid-cols-7 gap-2">
+                {Array.from({ length: primerDiaAjustado }).map((_, index) => (
+                  <div key={`empty-${index}`} className="h-16 sm:h-20 rounded-xl bg-transparent"></div>
+                ))}
+
+                {Array.from({ length: totalDiasMes }).map((_, index) => {
+                  const diaNum = index + 1
+                  const mesStr = String(mesActualCal + 1).padStart(2, '0')
+                  const diaStr = String(diaNum).padStart(2, '0')
+                  const fechaStr = `${añoActualCal}-${mesStr}-${diaStr}`
+
+                  const registrosDia = producidosPorFechaMap[fechaStr] || []
+                  const totalDia = registrosDia.reduce((a, c) => a + Number(c.monto), 0)
+                  
+                  const esDiaPicoYPlaca = registrosDia.some(r => (r.observaciones || '').toLowerCase().includes('pico y placa'))
+
+                  const hoyFechaStr = new Date().toISOString().split('T')[0]
+                  const esDiaPasadoOActual = fechaStr <= hoyFechaStr
+
+                  let puntoColor = 'bg-gray-600'
+                  let estadoBorde = darkMode ? 'border-gray-800 bg-gray-800/40' : 'border-gray-200 bg-gray-50'
+
+                  if (totalDia > 0) {
+                    puntoColor = 'bg-green-500 shadow-green-500/50 shadow-md'
+                    estadoBorde = darkMode ? 'border-green-800/60 bg-green-950/20' : 'border-green-200 bg-green-50/50'
+                  } else if (esDiaPicoYPlaca) {
+                    puntoColor = 'bg-blue-500 shadow-blue-500/50 shadow-md'
+                    estadoBorde = darkMode ? 'border-blue-800/60 bg-blue-950/30' : 'border-blue-200 bg-blue-50/60'
+                  } else if (esDiaPasadoOActual) {
+                    puntoColor = 'bg-red-500 shadow-red-500/50 shadow-md'
+                    estadoBorde = darkMode ? 'border-red-900/40 bg-red-950/10' : 'border-red-100 bg-red-50/30'
+                  }
+
+                  return (
+                    <div
+                      key={fechaStr}
+                      onClick={() => setDiaSeleccionadoModal({ fecha: fechaStr, registros: registrosDia, total: totalDia, esPicoYPlaca: esDiaPicoYPlaca })}
+                      className={`h-16 sm:h-20 p-2 rounded-xl border flex flex-col justify-between cursor-pointer transition transform hover:scale-105 ${estadoBorde}`}
+                    >
+                      <div className="flex justify-between items-center">
+                        <span className="font-extrabold text-xs sm:text-sm">{diaNum}</span>
+                        <span className={`w-2.5 h-2.5 rounded-full ${puntoColor}`}></span>
+                      </div>
+                      <div className="text-right">
+                        {totalDia > 0 ? (
+                          <span className="text-[10px] sm:text-xs font-black text-green-400 block truncate">
+                            ${totalDia.toLocaleString()}
+                          </span>
+                        ) : esDiaPicoYPlaca ? (
+                          <span className="text-[9px] sm:text-[10px] font-black text-blue-400 block truncate">
+                            🚘 Pico y Placa
+                          </span>
+                        ) : (
+                          <span className={`text-[10px] ${textMuted} block`}>$0</span>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
 
+            {/* HISTORIAL DE MANTENIMIENTOS (CON TOTAL INVERTIDO EN EL MES) */}
             <div className={`p-6 rounded-xl shadow border-t-4 border-purple-500 ${bgCard}`}>
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
-                <h2 className="text-lg font-bold">🛠️ Historial de Mantenimientos y Repuestos</h2>
-                <span className="text-xs text-purple-300 font-bold bg-purple-900/50 px-2.5 py-1 rounded-full border border-purple-700">
-                  {mantenimientosFiltrados.length} registro(s) encontrado(s)
+                <div>
+                  <h2 className="text-lg font-bold">🛠️ Historial de Mantenimientos y Repuestos</h2>
+                  <p className={`text-xs mt-0.5 ${textMuted}`}>Total invertido este mes: <span className="font-black text-red-400">${totalMantenimientosMes.toLocaleString()}</span></p>
+                </div>
+                <span className="text-xs text-purple-300 font-bold bg-purple-900/50 px-3 py-1.5 rounded-full border border-purple-700 shadow-sm">
+                  Inversión Mes: ${totalMantenimientosMes.toLocaleString()}
                 </span>
               </div>
 
@@ -848,7 +1154,23 @@ export default function App() {
                                 </span>
                               </div>
                               <span className={`italic text-xs ${textMuted}`}>{item.observaciones || 'Sin detalles'}</span>
-                              <span className="font-bold text-red-400">-${Number(item.monto).toLocaleString()}</span>
+                              <div className="flex items-center space-x-2">
+                                <span className="font-bold text-red-400">-${Number(item.monto).toLocaleString()}</span>
+                                <button
+                                  onClick={() => abrirEdicionMantenimiento(item)}
+                                  className="bg-yellow-400 hover:bg-yellow-500 text-gray-950 px-2 py-1 rounded text-xs font-bold transition shadow-sm"
+                                  title="Editar este mantenimiento"
+                                >
+                                  ✏️
+                                </button>
+                                <button
+                                  onClick={() => eliminarMantenimiento(item.id)}
+                                  className="bg-red-900/50 hover:bg-red-900 text-red-300 px-2 py-1 rounded text-xs font-bold transition border border-red-700 shadow-sm"
+                                  title="Eliminar este mantenimiento"
+                                >
+                                  🗑️
+                                </button>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -857,6 +1179,360 @@ export default function App() {
                   })}
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* MODAL DETALLE DE DÍA SELECCIONADO EN CALENDARIO */}
+        {diaSeleccionadoModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border space-y-4 ${bgCard}`}>
+              <div className="flex justify-between items-center border-b pb-3">
+                <div>
+                  <h3 className="text-base font-extrabold">📅 Detalle del Día</h3>
+                  <p className={`text-xs ${textMuted}`}>{diaSeleccionadoModal.fecha}</p>
+                </div>
+                <button
+                  onClick={() => setDiaSeleccionadoModal(null)}
+                  className="text-gray-400 hover:text-gray-100 font-bold text-lg"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="flex justify-between items-center bg-gray-800/30 p-3 rounded-xl border">
+                <span className="text-sm font-bold">Total Producido:</span>
+                <span className="text-base font-black text-green-400">${diaSeleccionadoModal.total.toLocaleString()}</span>
+              </div>
+
+              <div>
+                <h4 className="text-xs font-bold uppercase mb-2 text-gray-400">Taxis Registrados en esta fecha:</h4>
+                {diaSeleccionadoModal.registros.length === 0 ? (
+                  <p className={`text-sm italic py-4 text-center ${textMuted}`}>No hay registros en este día (Día en rojo / sin producción).</p>
+                ) : (
+                  <div className="space-y-2 max-h-60 overflow-y-auto">
+                    {diaSeleccionadoModal.registros.map(item => {
+                      const esPicoPlacaItem = (item.observaciones || '').toLowerCase().includes('pico y placa')
+                      const placaTaxi = item.vehiculos?.placa || 'N/A'
+                      return (
+                        <div key={item.id} className={rowClass}>
+                          <div>
+                            <span className="font-bold">Placa: {placaTaxi}</span>
+                            <p className={`text-xs ${textMuted}`}>{item.observaciones || 'Sin notas'}</p>
+                          </div>
+                          
+                          <div className="flex items-center space-x-2">
+                            {esPicoPlacaItem ? (
+                              <span className="font-bold text-xs bg-blue-900/60 text-blue-300 px-2.5 py-1 rounded-full border border-blue-700">
+                                🚘 Pico y Placa ($0)
+                              </span>
+                            ) : (
+                              <span className="font-bold text-green-400">+${Number(item.monto).toLocaleString()}</span>
+                            )}
+
+                            <button
+                              onClick={() => abrirEdicionProducido(item)}
+                              className="bg-yellow-400 hover:bg-yellow-500 text-gray-950 px-2 py-1 rounded text-xs font-bold transition shadow-sm"
+                              title="Editar este producido"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              onClick={() => eliminarProducido(item.id, placaTaxi)}
+                              className="bg-red-900/50 hover:bg-red-900 text-red-300 px-2 py-1 rounded text-xs font-bold transition border border-red-700 shadow-sm"
+                              title="Eliminar este producido"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={() => setDiaSeleccionadoModal(null)}
+                className="w-full bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL DE EDICIÓN DE PRODUCIDO */}
+        {editandoProducido && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border ${bgCard}`}>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-bold">✏️ Editar Producido</h3>
+                <button
+                  onClick={() => setEditandoProducido(null)}
+                  className="text-gray-400 hover:text-gray-100 font-bold text-lg"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={guardarEdicionProducido} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1">Vehículo / Placa</label>
+                  <select
+                    value={editProdVehiculoId}
+                    onChange={(e) => setEditProdVehiculoId(e.target.value)}
+                    className={selectClass}
+                  >
+                    {vehiculos.map((v) => (
+                      <option key={v.id} value={v.id} className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Placa: {v.placa}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <label className={`flex items-center space-x-2 p-2.5 rounded-lg border cursor-pointer transition ${editProdEsPicoYPlaca ? 'bg-blue-900/40 border-blue-500 text-blue-300' : (darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200')}`}>
+                  <input
+                    type="checkbox"
+                    checked={editProdEsPicoYPlaca}
+                    onChange={(e) => {
+                      setEditProdEsPicoYPlaca(e.target.checked)
+                      if (e.target.checked) setEditProdMonto('0')
+                    }}
+                    className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
+                  />
+                  <span className="text-xs font-bold">🚘 Es Pico y Placa (Producido $0)</span>
+                </label>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Monto ($)</label>
+                    <input
+                      type="number"
+                      value={editProdMonto}
+                      disabled={editProdEsPicoYPlaca}
+                      onChange={(e) => setEditProdMonto(e.target.value)}
+                      className={`${inputClass} ${editProdEsPicoYPlaca ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      required={!editProdEsPicoYPlaca}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Fecha</label>
+                    <input
+                      type="date"
+                      value={editProdFecha}
+                      onChange={(e) => setEditProdFecha(e.target.value)}
+                      className={inputClass}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold mb-1">Observaciones / Notas</label>
+                  <input
+                    type="text"
+                    value={editProdObs}
+                    onChange={(e) => setEditProdObs(e.target.value)}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div className="flex space-x-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditandoProducido(null)}
+                    className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    Guardar Cambios
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL DE EDICIÓN DE CONDUCTOR */}
+        {editandoConductor && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border space-y-4 ${bgCard}`}>
+              <div className="flex justify-between items-center border-b pb-3">
+                <h3 className="text-base font-extrabold">✏️ Editar Conductor</h3>
+                <button
+                  onClick={() => setEditandoConductor(null)}
+                  className="text-gray-400 hover:text-gray-100 font-bold text-lg"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={guardarEdicionConductor} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1">Nombre Completo</label>
+                  <input
+                    type="text"
+                    value={editCondNombre}
+                    onChange={(e) => setEditCondNombre(e.target.value)}
+                    className={inputClass}
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Teléfono</label>
+                    <input
+                      type="text"
+                      value={editCondTelefono}
+                      onChange={(e) => setEditCondTelefono(e.target.value)}
+                      className={inputClass}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Turno</label>
+                    <select
+                      value={editCondTurno}
+                      onChange={(e) => setEditCondTurno(e.target.value)}
+                      className={selectClass}
+                    >
+                      <option value="Día" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Día</option>
+                      <option value="Noche" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Noche</option>
+                      <option value="24 Horas" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>24 Horas</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold mb-1">Asignar a Taxi</label>
+                  <select
+                    value={editCondVehiculoId}
+                    onChange={(e) => setEditCondVehiculoId(e.target.value)}
+                    className={selectClass}
+                  >
+                    <option value="" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Sin taxi asignado</option>
+                    {vehiculos.map((v) => (
+                      <option key={v.id} value={v.id} className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Placa: {v.placa}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex space-x-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditandoConductor(null)}
+                    className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    Guardar Cambios
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL DE EDICIÓN DE MANTENIMIENTO */}
+        {editandoGasto && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border ${bgCard}`}>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-bold">✏️ Editar Mantenimiento</h3>
+                <button
+                  onClick={() => setEditandoGasto(null)}
+                  className="text-gray-400 hover:text-gray-100 font-bold text-lg"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={guardarEdicionMantenimiento} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1">Vehículo / Placa</label>
+                  <select
+                    value={editVehiculoId}
+                    onChange={(e) => setEditVehiculoId(e.target.value)}
+                    className={selectClass}
+                  >
+                    {vehiculos.map((v) => (
+                      <option key={v.id} value={v.id} className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Placa: {v.placa}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold mb-1">Categoría</label>
+                  <select
+                    value={editCategoria}
+                    onChange={(e) => setEditCategoria(e.target.value)}
+                    className={selectClass}
+                  >
+                    <option value="Cambio de Aceite" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Cambio de Aceite</option>
+                    <option value="Repuestos / Piezas" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Repuestos / Piezas</option>
+                    <option value="Taller / Mano de Obra" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Taller / Mano de Obra</option>
+                    <option value="Llantas / Frenos" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Llantas / Frenos</option>
+                    <option value="Lavado / Otros" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Lavado / Otros</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Monto ($)</label>
+                    <input
+                      type="number"
+                      value={editMonto}
+                      onChange={(e) => setEditMonto(e.target.value)}
+                      className={inputClass}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Fecha</label>
+                    <input
+                      type="date"
+                      value={editFecha}
+                      onChange={(e) => setEditFecha(e.target.value)}
+                      className={inputClass}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold mb-1">Observaciones / Detalles</label>
+                  <input
+                    type="text"
+                    value={editObs}
+                    onChange={(e) => setEditObs(e.target.value)}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div className="flex space-x-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditandoGasto(null)}
+                    className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    Guardar Cambios
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}
@@ -1013,13 +1689,22 @@ export default function App() {
                         </span>
                       </div>
 
-                      <button
-                        onClick={() => eliminarConductor(c.id, c.nombre)}
-                        className="bg-red-900/50 hover:bg-red-900 text-red-300 p-2 rounded-lg text-xs font-bold transition border border-red-700"
-                        title="Eliminar conductor"
-                      >
-                        🗑️ Eliminar
-                      </button>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          onClick={() => abrirEdicionConductor(c)}
+                          className="bg-yellow-400 hover:bg-yellow-500 text-gray-950 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm"
+                          title="Editar conductor"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => eliminarConductor(c.id, c.nombre)}
+                          className="bg-red-900/50 hover:bg-red-900 text-red-300 px-2.5 py-1.5 rounded-lg text-xs font-bold transition border border-red-700"
+                          title="Eliminar conductor"
+                        >
+                          🗑️
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
