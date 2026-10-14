@@ -14,6 +14,8 @@ export default function App() {
   // Resumen financiero
   const [producidoHoy, setProducidoHoy] = useState(0)
   const [gastosHoy, setGastosHoy] = useState(0)
+  const [producidoMes, setProducidoMes] = useState(0)
+  const [gastosMes, setGastosMes] = useState(0)
   const [alertasCount, setAlertasCount] = useState(0)
 
   // Estados formularios
@@ -26,15 +28,25 @@ export default function App() {
   const [turnoConductor, setTurnoConductor] = useState('Día')
   const [vehiculoConductorSel, setVehiculoConductorSel] = useState('')
 
+  // Producido con fecha personalizable
   const [vehiculoSeleccionado, setVehiculoSeleccionado] = useState('')
   const [monto, setMonto] = useState('')
+  const [fechaProducido, setFechaProducido] = useState(new Date().toISOString().split('T')[0])
   const [observaciones, setObservaciones] = useState('')
 
+  // Gasto / Mantenimiento con fecha personalizable
   const [vehiculoGastoSeleccionado, setVehiculoGastoSeleccionado] = useState('')
   const [montoGasto, setMontoGasto] = useState('')
+  const [fechaGasto, setFechaGasto] = useState(new Date().toISOString().split('T')[0])
   const [categoriaGasto, setCategoriaGasto] = useState('Cambio de Aceite')
   const [obsGasto, setObsGasto] = useState('')
 
+  // Filtros para el historial de mantenimientos
+  const [filtroMantenimientoTexto, setFiltroMantenimientoTexto] = useState('')
+  const [filtroMantenimientoCategoria, setFiltroMantenimientoCategoria] = useState('TODAS')
+  const [filtroMantenimientoMes, setFiltroMantenimientoMes] = useState('TODOS')
+
+  // Documento
   const [vehiculoDocSeleccionado, setVehiculoDocSeleccionado] = useState('')
   const [tipoDocumento, setTipoDocumento] = useState('SOAT')
   const [fechaVencimiento, setFechaVencimiento] = useState('')
@@ -79,7 +91,7 @@ export default function App() {
     const { data: tData } = await supabase
       .from('transacciones')
       .select('*, vehiculos(placa)')
-      .order('id', { ascending: false })
+      .order('fecha', { ascending: false })
     setTransacciones(tData || [])
 
     // 4. Obtener documentos
@@ -89,20 +101,33 @@ export default function App() {
       .order('fecha_vencimiento', { ascending: true })
     setDocumentos(dData || [])
 
-    // 5. Calcular Producido y Gastos de hoy
+    // 5. Cálculos diarios y mensuales
     const hoyStr = new Date().toISOString().split('T')[0]
-    
-    const totalProducido = (tData || [])
+    const mesActualStr = hoyStr.substring(0, 7) // 'YYYY-MM'
+
+    // Totales Hoy
+    const totalProdHoy = (tData || [])
       .filter(t => t.fecha === hoyStr && t.tipo_movimiento === 'producido')
       .reduce((acc, curr) => acc + Number(curr.monto), 0)
-    setProducidoHoy(totalProducido)
+    setProducidoHoy(totalProdHoy)
 
-    const totalGastos = (tData || [])
+    const totalGastHoy = (tData || [])
       .filter(t => t.fecha === hoyStr && t.tipo_movimiento === 'gasto')
       .reduce((acc, curr) => acc + Number(curr.monto), 0)
-    setGastosHoy(totalGastos)
+    setGastosHoy(totalGastHoy)
 
-    // 6. Calcular alertas de documentos
+    // Totales Mes
+    const totalProdMes = (tData || [])
+      .filter(t => t.fecha && t.fecha.startsWith(mesActualStr) && t.tipo_movimiento === 'producido')
+      .reduce((acc, curr) => acc + Number(curr.monto), 0)
+    setProducidoMes(totalProdMes)
+
+    const totalGastMes = (tData || [])
+      .filter(t => t.fecha && t.fecha.startsWith(mesActualStr) && t.tipo_movimiento === 'gasto')
+      .reduce((acc, curr) => acc + Number(curr.monto), 0)
+    setGastosMes(totalGastMes)
+
+    // 6. Alertas de documentos
     const hoy = new Date()
     let alertas = 0
     ;(dData || []).forEach(doc => {
@@ -113,7 +138,6 @@ export default function App() {
     setAlertasCount(alertas)
   }
 
-  // Métodos de guardar
   async function agregarVehiculo(e) {
     e.preventDefault()
     if (!placa) return alert('Ingresa la placa')
@@ -158,6 +182,7 @@ export default function App() {
       vehiculo_id: vehiculoSeleccionado,
       tipo_movimiento: 'producido',
       monto: Number(monto),
+      fecha: fechaProducido,
       estado_pago: 'Pagado',
       observaciones
     }])
@@ -179,6 +204,7 @@ export default function App() {
       tipo_movimiento: 'gasto',
       categoria_gasto: categoriaGasto,
       monto: Number(montoGasto),
+      fecha: fechaGasto,
       observaciones: obsGasto
     }])
 
@@ -216,6 +242,62 @@ export default function App() {
     if (diffDias <= 15) return { texto: `Vence en ${diffDias} días`, color: 'bg-yellow-100 text-yellow-800 border-yellow-300' }
     return { texto: 'Al día', color: 'bg-green-100 text-green-800 border-green-300' }
   }
+
+  // Obtener lista única de meses disponibles en las transacciones para el filtro
+  const mesesDisponibles = Array.from(
+    new Set(
+      transacciones
+        .filter(t => t.tipo_movimiento === 'gasto' && t.fecha)
+        .map(t => t.fecha.substring(0, 7))
+    )
+  ).sort().reverse()
+
+  // Agrupar producidos por fecha
+  const producidosPorFecha = transacciones
+    .filter(t => t.tipo_movimiento === 'producido')
+    .reduce((acc, curr) => {
+      const f = curr.fecha || 'Sin Fecha'
+      if (!acc[f]) acc[f] = []
+      acc[f].push(curr)
+      return acc
+    }, {})
+
+  // Filtrar mantenimientos antes de agrupar por fecha
+  const mantenimientosFiltrados = transacciones.filter(t => {
+    if (t.tipo_movimiento !== 'gasto') return false
+
+    // Filtro por mes (YYYY-MM)
+    if (filtroMantenimientoMes !== 'TODOS' && (!t.fecha || !t.fecha.startsWith(filtroMantenimientoMes))) {
+      return false
+    }
+
+    // Filtro por categoría
+    if (filtroMantenimientoCategoria !== 'TODAS' && t.categoria_gasto !== filtroMantenimientoCategoria) {
+      return false
+    }
+
+    // Filtro por texto libre (placa o nota/repuesto)
+    if (filtroMantenimientoTexto.trim() !== '') {
+      const query = filtroMantenimientoTexto.toLowerCase()
+      const placaStr = (t.vehiculos?.placa || '').toLowerCase()
+      const obsStr = (t.observaciones || '').toLowerCase()
+      const catStr = (t.categoria_gasto || '').toLowerCase()
+
+      if (!placaStr.includes(query) && !obsStr.includes(query) && !catStr.includes(query)) {
+        return false
+      }
+    }
+
+    return true
+  })
+
+  // Agrupar mantenimientos filtrados por fecha
+  const mantenimientosPorFecha = mantenimientosFiltrados.reduce((acc, curr) => {
+    const f = curr.fecha || 'Sin Fecha'
+    if (!acc[f]) acc[f] = []
+    acc[f].push(curr)
+    return acc
+  }, {})
 
   if (!session) return <Auth />
 
@@ -278,19 +360,19 @@ export default function App() {
         {/* 1. PESTAÑA: INICIO / DASHBOARD PRINCIPAL */}
         {tab === 'inicio' && (
           <div className="space-y-6">
-            {/* TARJETAS DE RESUMEN FINANCIERO */}
+            {/* RESUMEN HOY Y MES */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
               <div className="bg-white p-4 rounded-xl shadow border-l-4 border-green-500">
                 <p className="text-gray-500 text-xs font-semibold uppercase">Producido Hoy</p>
-                <p className="text-xl sm:text-2xl font-bold text-gray-800">\${producidoHoy.toLocaleString()}</p>
+                <p className="text-xl sm:text-2xl font-bold text-gray-800">${producidoHoy.toLocaleString()}</p>
               </div>
-              <div className="bg-white p-4 rounded-xl shadow border-l-4 border-purple-500">
-                <p className="text-gray-500 text-xs font-semibold uppercase">Gastos Hoy</p>
-                <p className="text-xl sm:text-2xl font-bold text-purple-600">\${gastosHoy.toLocaleString()}</p>
+              <div className="bg-white p-4 rounded-xl shadow border-l-4 border-emerald-600">
+                <p className="text-gray-500 text-xs font-semibold uppercase">Producido Mes</p>
+                <p className="text-xl sm:text-2xl font-bold text-emerald-700">${producidoMes.toLocaleString()}</p>
               </div>
               <div className="bg-white p-4 rounded-xl shadow border-l-4 border-blue-500">
-                <p className="text-gray-500 text-xs font-semibold uppercase">Ganancia Neta</p>
-                <p className="text-xl sm:text-2xl font-bold text-blue-600">\${(producidoHoy - gastosHoy).toLocaleString()}</p>
+                <p className="text-gray-500 text-xs font-semibold uppercase">Ganancia Mes Neta</p>
+                <p className="text-xl sm:text-2xl font-bold text-blue-600">${(producidoMes - gastosMes).toLocaleString()}</p>
               </div>
               <div className="bg-white p-4 rounded-xl shadow border-l-4 border-red-500">
                 <p className="text-gray-500 text-xs font-semibold uppercase">Alertas Papeles</p>
@@ -331,13 +413,13 @@ export default function App() {
               {/* ÚLTIMOS MOVIMIENTOS */}
               <div className="bg-white p-6 rounded-xl shadow">
                 <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-base font-bold text-gray-800">📋 Movimientos de Hoy</h2>
+                  <h2 className="text-base font-bold text-gray-800">📋 Movimientos Recientes</h2>
                   <button onClick={() => setTab('finanzas')} className="text-xs text-yellow-600 font-bold hover:underline">
                     + Registrar
                   </button>
                 </div>
                 {transacciones.length === 0 ? (
-                  <p className="text-gray-500 text-sm">No hay movimientos hoy.</p>
+                  <p className="text-gray-500 text-sm">No hay movimientos aún.</p>
                 ) : (
                   <div className="space-y-3 max-h-60 overflow-y-auto">
                     {transacciones.slice(0, 5).map((t) => (
@@ -346,10 +428,10 @@ export default function App() {
                           <span className="font-bold text-gray-800">
                             {t.vehiculos?.placa || 'N/A'} - {t.tipo_movimiento === 'producido' ? 'Ingreso' : (t.categoria_gasto || 'Gasto')}
                           </span>
-                          <p className="text-xs text-gray-500">{t.observaciones || 'Sin detalles'}</p>
+                          <p className="text-xs text-gray-500">{t.observaciones || 'Sin detalles'} ({t.fecha})</p>
                         </div>
                         <span className={`font-bold text-sm ${t.tipo_movimiento === 'producido' ? 'text-green-600' : 'text-red-600'}`}>
-                          {t.tipo_movimiento === 'producido' ? '+' : '-'}\${Number(t.monto).toLocaleString()}
+                          {t.tipo_movimiento === 'producido' ? '+' : '-'}${Number(t.monto).toLocaleString()}
                         </span>
                       </div>
                     ))}
@@ -364,7 +446,7 @@ export default function App() {
         {tab === 'finanzas' && (
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Formulario Producido */}
+              {/* Formulario Producido con Fecha */}
               <div className="bg-white p-5 rounded-xl shadow border-t-4 border-green-500">
                 <h2 className="text-base font-bold text-gray-800 mb-3">💵 Registrar Producido Diario</h2>
                 <form onSubmit={registrarProducido} className="space-y-3">
@@ -378,18 +460,27 @@ export default function App() {
                     ))}
                   </select>
 
-                  <input
-                    type="number"
-                    placeholder="Monto (ej: 120000)"
-                    value={monto}
-                    onChange={(e) => setMonto(e.target.value)}
-                    className="w-full p-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-400"
-                    required
-                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="number"
+                      placeholder="Monto (ej: 120000)"
+                      value={monto}
+                      onChange={(e) => setMonto(e.target.value)}
+                      className="p-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-400"
+                      required
+                    />
+                    <input
+                      type="date"
+                      value={fechaProducido}
+                      onChange={(e) => setFechaProducido(e.target.value)}
+                      className="p-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-400"
+                      required
+                    />
+                  </div>
 
                   <input
                     type="text"
-                    placeholder="Obs: Turno día"
+                    placeholder="Obs: Turno día / Noche"
                     value={observaciones}
                     onChange={(e) => setObservaciones(e.target.value)}
                     className="w-full p-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-400"
@@ -404,7 +495,7 @@ export default function App() {
                 </form>
               </div>
 
-              {/* Formulario Mantenimiento */}
+              {/* Formulario Mantenimiento con Fecha */}
               <div className="bg-white p-5 rounded-xl shadow border-t-4 border-purple-500">
                 <h2 className="text-base font-bold text-gray-800 mb-3">🛠️ Registrar Mantenimiento / Gasto</h2>
                 <form onSubmit={registrarGasto} className="space-y-3">
@@ -430,14 +521,23 @@ export default function App() {
                     <option value="Lavado / Otros">Lavado / Otros</option>
                   </select>
 
-                  <input
-                    type="number"
-                    placeholder="Costo (ej: 85000)"
-                    value={montoGasto}
-                    onChange={(e) => setMontoGasto(e.target.value)}
-                    className="w-full p-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-purple-400"
-                    required
-                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="number"
+                      placeholder="Costo (ej: 85000)"
+                      value={montoGasto}
+                      onChange={(e) => setMontoGasto(e.target.value)}
+                      className="p-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-purple-400"
+                      required
+                    />
+                    <input
+                      type="date"
+                      value={fechaGasto}
+                      onChange={(e) => setFechaGasto(e.target.value)}
+                      className="p-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-purple-400"
+                      required
+                    />
+                  </div>
 
                   <input
                     type="text"
@@ -451,32 +551,134 @@ export default function App() {
                     type="submit"
                     className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold p-2.5 rounded-lg text-sm transition"
                   >
-                    Guardar Gasto
+                    Guardar Mantenimiento
                   </button>
                 </form>
               </div>
             </div>
 
-            {/* Historial Completo */}
+            {/* SECCIÓN 1: CONTEO DE PRODUCIDOS DÍA A DÍA */}
             <div className="bg-white p-6 rounded-xl shadow">
-              <h2 className="text-lg font-bold text-gray-800 mb-4">📋 Historial Completo de Movimientos</h2>
-              {transacciones.length === 0 ? (
-                <p className="text-gray-500 text-sm">No hay registros aún.</p>
+              <h2 className="text-lg font-bold text-gray-800 mb-4">📅 Conteo de Producidos Día a Día</h2>
+              {Object.keys(producidosPorFecha).length === 0 ? (
+                <p className="text-gray-500 text-sm">No hay producidos registrados aún.</p>
               ) : (
-                <div className="space-y-3 max-h-96 overflow-y-auto">
-                  {transacciones.map((t) => (
-                    <div key={t.id} className="p-3 border rounded-lg bg-gray-50 flex justify-between items-center text-sm">
-                      <div>
-                        <span className="font-bold text-gray-800">
-                          {t.vehiculos?.placa || 'N/A'} - {t.tipo_movimiento === 'producido' ? 'Ingreso' : (t.categoria_gasto || 'Gasto')}
-                        </span>
-                        <p className="text-xs text-gray-500">{t.observaciones || 'Sin detalles'} ({t.fecha})</p>
+                <div className="space-y-4 max-h-80 overflow-y-auto">
+                  {Object.entries(producidosPorFecha).map(([fecha, lista]) => {
+                    const totalDia = lista.reduce((a, c) => a + Number(c.monto), 0)
+                    return (
+                      <div key={fecha} className="border rounded-xl p-4 bg-gray-50">
+                        <div className="flex justify-between items-center border-b pb-2 mb-3">
+                          <span className="font-extrabold text-gray-800 text-sm">📆 Fecha: {fecha}</span>
+                          <span className="bg-green-100 text-green-800 font-black text-sm px-3 py-1 rounded-full border border-green-300">
+                            Total Producido: ${totalDia.toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="space-y-2">
+                          {lista.map((item) => (
+                            <div key={item.id} className="flex justify-between items-center text-xs sm:text-sm bg-white p-2.5 rounded border">
+                              <span className="font-bold text-gray-700">Placa: {item.vehiculos?.placa || 'N/A'}</span>
+                              <span className="text-gray-500">{item.observaciones || 'Sin notas'}</span>
+                              <span className="font-bold text-green-600">+${Number(item.monto).toLocaleString()}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                      <span className={`font-bold text-base ${t.tipo_movimiento === 'producido' ? 'text-green-600' : 'text-red-600'}`}>
-                        {t.tipo_movimiento === 'producido' ? '+' : '-'}\${Number(t.monto).toLocaleString()}
-                      </span>
-                    </div>
-                  ))}
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* SECCIÓN 2: HISTORIAL DE MANTENIMIENTOS CON BUSCADOR, CATEGORÍA Y MES */}
+            <div className="bg-white p-6 rounded-xl shadow border-t-4 border-purple-500">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
+                <h2 className="text-lg font-bold text-gray-800">🛠️ Historial de Mantenimientos y Repuestos</h2>
+                <span className="text-xs text-purple-700 font-bold bg-purple-100 px-2.5 py-1 rounded-full">
+                  {mantenimientosFiltrados.length} registro(s) encontrado(s)
+                </span>
+              </div>
+
+              {/* BARRA DE FILTROS TRES COLUMNAS */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4 bg-purple-50 p-3 rounded-xl border border-purple-100">
+                <div>
+                  <label className="block text-xs font-bold text-purple-900 mb-1">🔍 Buscar Nota o Placa</label>
+                  <input
+                    type="text"
+                    placeholder="Ej: pastillas, WPO841..."
+                    value={filtroMantenimientoTexto}
+                    onChange={(e) => setFiltroMantenimientoTexto(e.target.value)}
+                    className="w-full p-2 border rounded-lg bg-white text-xs outline-none focus:ring-2 focus:ring-purple-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-purple-900 mb-1">🏷️ Categoría</label>
+                  <select
+                    value={filtroMantenimientoCategoria}
+                    onChange={(e) => setFiltroMantenimientoCategoria(e.target.value)}
+                    className="w-full p-2 border rounded-lg bg-white text-xs outline-none focus:ring-2 focus:ring-purple-400"
+                  >
+                    <option value="TODAS">Todas las categorías</option>
+                    <option value="Cambio de Aceite">Cambio de Aceite</option>
+                    <option value="Repuestos / Piezas">Repuestos / Piezas</option>
+                    <option value="Taller / Mano de Obra">Taller / Mano de Obra</option>
+                    <option value="Llantas / Frenos">Llantas / Frenos</option>
+                    <option value="Lavado / Otros">Lavado / Otros</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-purple-900 mb-1">📅 Mes / Período</label>
+                  <select
+                    value={filtroMantenimientoMes}
+                    onChange={(e) => setFiltroMantenimientoMes(e.target.value)}
+                    className="w-full p-2 border rounded-lg bg-white text-xs outline-none focus:ring-2 focus:ring-purple-400"
+                  >
+                    <option value="TODOS">Todos los meses</option>
+                    {mesesDisponibles.map((m) => (
+                      <option key={m} value={m}>Mes: {m}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* RESULTADOS DE MANTENIMIENTOS */}
+              {Object.keys(mantenimientosPorFecha).length === 0 ? (
+                <p className="text-gray-500 text-sm py-4 text-center">
+                  {filtroMantenimientoTexto || filtroMantenimientoCategoria !== 'TODAS' || filtroMantenimientoMes !== 'TODOS'
+                    ? 'No se encontraron mantenimientos con los filtros aplicados.'
+                    : 'No hay mantenimientos o repuestos registrados aún.'}
+                </p>
+              ) : (
+                <div className="space-y-4 max-h-80 overflow-y-auto">
+                  {Object.entries(mantenimientosPorFecha).map(([fecha, lista]) => {
+                    const totalGastoDia = lista.reduce((a, c) => a + Number(c.monto), 0)
+                    return (
+                      <div key={fecha} className="border rounded-xl p-4 bg-purple-50/40">
+                        <div className="flex justify-between items-center border-b border-purple-200 pb-2 mb-3">
+                          <span className="font-extrabold text-purple-900 text-sm">📆 Fecha Mantenimiento: {fecha}</span>
+                          <span className="bg-purple-100 text-purple-900 font-black text-xs sm:text-sm px-3 py-1 rounded-full border border-purple-300">
+                            Subtotal: ${totalGastoDia.toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="space-y-2">
+                          {lista.map((item) => (
+                            <div key={item.id} className="flex justify-between items-center text-xs sm:text-sm bg-white p-2.5 rounded border border-purple-100">
+                              <div>
+                                <span className="font-bold text-gray-800">Placa: {item.vehiculos?.placa || 'N/A'}</span>
+                                <span className="ml-2 px-2 py-0.5 text-xs bg-purple-100 text-purple-800 font-bold rounded-md">
+                                  {item.categoria_gasto || 'Mantenimiento'}
+                                </span>
+                              </div>
+                              <span className="text-gray-600 italic text-xs">{item.observaciones || 'Sin detalles'}</span>
+                              <span className="font-bold text-red-600">-${Number(item.monto).toLocaleString()}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -487,7 +689,6 @@ export default function App() {
         {tab === 'flota' && (
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Formulario Taxi */}
               <div className="bg-white p-6 rounded-xl shadow border-t-4 border-yellow-400">
                 <h2 className="text-lg font-bold text-gray-800 mb-4">➕ Agregar Nuevo Taxi</h2>
                 <form onSubmit={agregarVehiculo} className="space-y-3">
@@ -524,7 +725,6 @@ export default function App() {
                 </form>
               </div>
 
-              {/* Formulario Conductor */}
               <div className="bg-white p-6 rounded-xl shadow border-t-4 border-orange-400">
                 <h2 className="text-lg font-bold text-gray-800 mb-4">👤 Registrar Conductor</h2>
                 <form onSubmit={agregarConductor} className="space-y-3">
@@ -579,7 +779,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Listas de conductores */}
             <div className="bg-white p-6 rounded-xl shadow">
               <h2 className="text-lg font-bold text-gray-800 mb-4">👨‍✈️ Conductores Registrados</h2>
               {conductores.length === 0 ? (
@@ -608,7 +807,6 @@ export default function App() {
         {/* 4. PESTAÑA: DOCUMENTACIÓN */}
         {tab === 'documentos' && (
           <div className="space-y-6">
-            {/* Formulario Documento */}
             <div className="bg-white p-6 rounded-xl shadow border-t-4 border-blue-500 max-w-xl mx-auto">
               <h2 className="text-lg font-bold text-gray-800 mb-4">📄 Registrar Vencimiento Papeles</h2>
               <form onSubmit={registrarDocumento} className="space-y-3">
@@ -650,7 +848,6 @@ export default function App() {
               </form>
             </div>
 
-            {/* Listado de Documentos */}
             <div className="bg-white p-6 rounded-xl shadow">
               <h2 className="text-lg font-bold text-gray-800 mb-4">📄 Estado de Documentos Registrados</h2>
               {documentos.length === 0 ? (
