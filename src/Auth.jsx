@@ -3,153 +3,114 @@ import { supabase } from './supabaseClient'
 
 export default function Auth() {
   const [loading, setLoading] = useState(false)
-  const [nombre, setNombre] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [modo, setModo] = useState('login') // 'login', 'registro', 'recuperar'
+  const [fullName, setFullName] = useState('')
+  const [isSignUp, setIsSignUp] = useState(false)
+  const [mostrarPassword, setMostrarPassword] = useState(false)
 
-  async function handleAuth(e) {
+  const handleAuth = async (e) => {
     e.preventDefault()
     setLoading(true)
 
-    if (modo === 'registro') {
-      if (!nombre.trim()) {
-        alert('Por favor ingresa tu nombre')
-        setLoading(false)
-        return
-      }
+    if (isSignUp) {
       const { error } = await supabase.auth.signUp({
         email,
         password,
         options: {
           data: {
-            full_name: nombre.trim()
-          }
-        }
+            full_name: fullName,
+          },
+        },
       })
-      if (error) alert('Error al registrarse: ' + error.message)
-      else alert('¡Cuenta creada exitosamente! Ya puedes iniciar sesión.')
-    } else if (modo === 'login') {
-      const { error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error) alert('Error al iniciar sesión: ' + error.message)
-    } else if (modo === 'recuperar') {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: window.location.origin
+      if (error) alert(error.message)
+      else alert('¡Registro exitoso! Revisa tu correo o inicia sesión.')
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
       })
-      if (error) alert('Error al enviar correo de recuperación: ' + error.message)
-      else alert('Te hemos enviado un enlace a tu correo para restablecer tu contraseña.')
+      if (error) alert(error.message)
     }
-
     setLoading(false)
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4 font-sans">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 border-t-8 border-yellow-400">
+    <div className="min-h-screen flex items-center justify-center bg-gray-900 p-4 font-sans">
+      <div className="bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-700">
         <div className="text-center mb-6">
           <span className="text-4xl">🚕</span>
-          <h1 className="text-2xl font-extrabold text-gray-900 mt-2">Gestión de Taxis</h1>
-          <p className="text-sm text-gray-500">
-            {modo === 'registro' && 'Crea tu cuenta de propietario'}
-            {modo === 'login' && 'Inicia sesión en tu flota'}
-            {modo === 'recuperar' && 'Recupera el acceso a tu cuenta'}
+          <h1 className="text-2xl font-black text-yellow-400 mt-2">Control de Taxis</h1>
+          <p className="text-xs text-gray-400 mt-1">
+            {isSignUp ? 'Crea una cuenta para gestionar tu flota' : 'Ingresa tus datos para continuar'}
           </p>
         </div>
 
         <form onSubmit={handleAuth} className="space-y-4">
-          {modo === 'registro' && (
+          {isSignUp && (
             <div>
-              <label className="block text-xs font-bold text-gray-700 uppercase mb-1">Tu Nombre</label>
+              <label className="block text-xs font-bold text-gray-300 mb-1">Nombre Completo</label>
               <input
                 type="text"
-                placeholder="Ej: Santiago"
-                value={nombre}
-                onChange={(e) => setNombre(e.target.value)}
-                className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 text-sm"
+                placeholder="Tu Nombre"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                className="w-full p-3 border rounded-xl bg-gray-900 border-gray-700 text-gray-100 text-sm outline-none focus:ring-2 focus:ring-yellow-400"
                 required
               />
             </div>
           )}
 
           <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-1">Correo Electrónico</label>
+            <label className="block text-xs font-bold text-gray-300 mb-1">Correo Electrónico</label>
             <input
               type="email"
               placeholder="tu@correo.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 text-sm"
+              className="w-full p-3 border rounded-xl bg-gray-900 border-gray-700 text-gray-100 text-sm outline-none focus:ring-2 focus:ring-yellow-400"
               required
             />
           </div>
 
-          {modo !== 'recuperar' && (
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <label className="block text-xs font-bold text-gray-700 uppercase">Contraseña</label>
-                {modo === 'login' && (
-                  <button
-                    type="button"
-                    onClick={() => setModo('recuperar')}
-                    className="text-xs text-yellow-600 hover:underline font-semibold"
-                  >
-                    ¿Olvidaste tu contraseña?
-                  </button>
-                )}
-              </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-300 mb-1">Contraseña</label>
+            <div className="relative">
               <input
-                type="password"
+                type={mostrarPassword ? 'text' : 'password'}
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-yellow-400 text-sm"
+                className="w-full p-3 pr-10 border rounded-xl bg-gray-900 border-gray-700 text-gray-100 text-sm outline-none focus:ring-2 focus:ring-yellow-400"
                 required
               />
+              <button
+                type="button"
+                onClick={() => setMostrarPassword(!mostrarPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-yellow-400 text-sm focus:outline-none"
+                title={mostrarPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+              >
+                {mostrarPassword ? '👁️‍🗨️' : '👁️'}
+              </button>
             </div>
-          )}
+          </div>
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-bold p-3 rounded-xl transition shadow-md"
+            className="w-full bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-extrabold p-3 rounded-xl text-sm transition shadow-md mt-2"
           >
-            {loading
-              ? 'Cargando...'
-              : modo === 'registro'
-              ? 'Crear Cuenta'
-              : modo === 'login'
-              ? 'Iniciar Sesión'
-              : 'Enviar Enlace de Recuperación'}
+            {loading ? 'Cargando...' : isSignUp ? 'Crear Cuenta' : 'Iniciar Sesión'}
           </button>
         </form>
 
-        <div className="mt-6 text-center space-y-2">
-          {modo === 'login' && (
-            <button
-              onClick={() => setModo('registro')}
-              className="text-xs text-gray-600 hover:underline font-semibold block w-full"
-            >
-              ¿No tienes cuenta? Regístrate aquí
-            </button>
-          )}
-
-          {modo === 'registro' && (
-            <button
-              onClick={() => setModo('login')}
-              className="text-xs text-gray-600 hover:underline font-semibold block w-full"
-            >
-              ¿Ya tienes una cuenta? Inicia sesión aquí
-            </button>
-          )}
-
-          {modo === 'recuperar' && (
-            <button
-              onClick={() => setModo('login')}
-              className="text-xs text-gray-600 hover:underline font-semibold block w-full"
-            >
-              Volver al Inicio de Sesión
-            </button>
-          )}
+        <div className="mt-6 text-center border-t border-gray-700 pt-4">
+          <button
+            onClick={() => setIsSignUp(!isSignUp)}
+            className="text-xs font-bold text-yellow-400 hover:underline"
+          >
+            {isSignUp ? '¿Ya tienes cuenta? Inicia Sesión' : '¿No tienes cuenta? Regístrate aquí'}
+          </button>
         </div>
       </div>
     </div>
