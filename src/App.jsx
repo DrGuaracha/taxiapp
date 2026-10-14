@@ -22,6 +22,7 @@ export default function App() {
   const [producidoMes, setProducidoMes] = useState(0)
   const [gastosMes, setGastosMes] = useState(0)
   const [alertasCount, setAlertasCount] = useState(0)
+  const [documentosProximosVencer, setDocumentosProximosVencer] = useState([])
 
   // Estados Perfil de Usuario
   const [perfilNombre, setPerfilNombre] = useState('')
@@ -45,20 +46,22 @@ export default function App() {
   const [editCondTurno, setEditCondTurno] = useState('Día')
   const [editCondVehiculoId, setEditCondVehiculoId] = useState('')
 
-  // Producido con fecha personalizable y opción Pico y Placa
+  // Tarifa diaria con fecha personalizable, Pico y Placa, y Domingo o Festivo
   const [vehiculoSeleccionado, setVehiculoSeleccionado] = useState('')
   const [monto, setMonto] = useState('')
   const [fechaProducido, setFechaProducido] = useState(new Date().toISOString().split('T')[0])
   const [observaciones, setObservaciones] = useState('')
   const [esPicoYPlaca, setEsPicoYPlaca] = useState(false)
+  const [esDomingoFestivo, setEsDomingoFestivo] = useState(false)
 
-  // Estado Modal Edición de Producido
+  // Estado Modal Edición de Tarifa
   const [editandoProducido, setEditandoProducido] = useState(null)
   const [editProdVehiculoId, setEditProdVehiculoId] = useState('')
   const [editProdMonto, setEditProdMonto] = useState('')
   const [editProdFecha, setEditProdFecha] = useState('')
   const [editProdObs, setEditProdObs] = useState('')
   const [editProdEsPicoYPlaca, setEditProdEsPicoYPlaca] = useState(false)
+  const [editProdEsDomingoFestivo, setEditProdEsDomingoFestivo] = useState(false)
 
   // Gasto / Mantenimiento con fecha personalizable
   const [vehiculoGastoSeleccionado, setVehiculoGastoSeleccionado] = useState('')
@@ -75,7 +78,7 @@ export default function App() {
   const [editCategoria, setEditCategoria] = useState('')
   const [editObs, setEditObs] = useState('')
 
-  // Estado para el Calendario de Producidos (Año y Mes actual)
+  // Estado para el Calendario de Tarifas (Año y Mes actual)
   const [fechaCalendario, setFechaCalendario] = useState(new Date())
   const [diaSeleccionadoModal, setDiaSeleccionadoModal] = useState(null)
 
@@ -174,12 +177,20 @@ export default function App() {
 
     const hoy = new Date()
     let alertas = 0
+    const docsUrgentes = []
+
     ;(dData || []).forEach(doc => {
       const fVenc = new Date(doc.fecha_vencimiento)
       const diffDias = Math.ceil((fVenc - hoy) / (1000 * 60 * 60 * 24))
-      if (diffDias <= 15) alertas++
+      if (diffDias <= 15) {
+        alertas++
+      }
+      if (diffDias <= 5) {
+        docsUrgentes.push({ ...doc, diasRestantes: diffDias })
+      }
     })
     setAlertasCount(alertas)
+    setDocumentosProximosVencer(docsUrgentes)
   }
 
   async function actualizarPerfil(e) {
@@ -261,7 +272,6 @@ export default function App() {
     }
   }
 
-  // ABRIR MODAL EDICIÓN CONDUCTOR
   function abrirEdicionConductor(c) {
     setEditandoConductor(c)
     setEditCondNombre(c.nombre)
@@ -270,7 +280,6 @@ export default function App() {
     setEditCondVehiculoId(c.vehiculo_id || '')
   }
 
-  // GUARDAR EDICIÓN CONDUCTOR
   async function guardarEdicionConductor(e) {
     e.preventDefault()
     if (!editandoConductor) return
@@ -328,9 +337,18 @@ export default function App() {
       return
     }
 
-    const montoFinal = esPicoYPlaca ? 0 : Number(monto)
-    const obsFinal = esPicoYPlaca 
-      ? (observaciones ? `Pico y Placa - ${observaciones}` : 'Pico y Placa') 
+    let montoFinal = Number(monto)
+    let etiquetaObs = ''
+
+    if (esPicoYPlaca) {
+      montoFinal = 0
+      etiquetaObs = 'Pico y Placa'
+    } else if (esDomingoFestivo) {
+      etiquetaObs = 'Domingo o Festivo'
+    }
+
+    const obsFinal = etiquetaObs 
+      ? (observaciones ? `${etiquetaObs} - ${observaciones}` : etiquetaObs) 
       : observaciones
 
     const { error } = await supabase.from('transacciones').insert([{
@@ -347,8 +365,9 @@ export default function App() {
       setMonto('')
       setObservaciones('')
       setEsPicoYPlaca(false)
+      setEsDomingoFestivo(false)
       obtenerDatos()
-      alert(esPicoYPlaca ? '¡Pico y Placa registrado con éxito!' : '¡Producido registrado con éxito!')
+      alert(esPicoYPlaca ? '¡Pico y Placa registrado con éxito!' : '¡Tarifa registrada con éxito!')
     }
   }
 
@@ -357,18 +376,30 @@ export default function App() {
     setEditProdVehiculoId(item.vehiculo_id)
     setEditProdMonto(item.monto)
     setEditProdFecha(item.fecha)
-    const esPyP = (item.observaciones || '').toLowerCase().includes('pico y placa')
+    const obsL = (item.observaciones || '').toLowerCase()
+    const esPyP = obsL.includes('pico y placa')
+    const esDom = obsL.includes('domingo o festivo')
     setEditProdEsPicoYPlaca(esPyP)
-    setEditProdObs(item.observaciones ? item.observaciones.replace(/^Pico y Placa\s*-\s*/i, '').replace(/^Pico y Placa$/i, '') : '')
+    setEditProdEsDomingoFestivo(esDom)
+    setEditProdObs(item.observaciones ? item.observaciones.replace(/^Pico y Placa\s*-\s*/i, '').replace(/^Pico y Placa$/i, '').replace(/^Domingo o Festivo\s*-\s*/i, '').replace(/^Domingo o Festivo$/i, '') : '')
   }
 
   async function guardarEdicionProducido(e) {
     e.preventDefault()
     if (!editandoProducido) return
 
-    const montoFinal = editProdEsPicoYPlaca ? 0 : Number(editProdMonto)
-    const obsFinal = editProdEsPicoYPlaca 
-      ? (editProdObs ? `Pico y Placa - ${editProdObs}` : 'Pico y Placa') 
+    let montoFinal = Number(editProdMonto)
+    let etiquetaObs = ''
+
+    if (editProdEsPicoYPlaca) {
+      montoFinal = 0
+      etiquetaObs = 'Pico y Placa'
+    } else if (editProdEsDomingoFestivo) {
+      etiquetaObs = 'Domingo o Festivo'
+    }
+
+    const obsFinal = etiquetaObs 
+      ? (editProdObs ? `${etiquetaObs} - ${editProdObs}` : etiquetaObs) 
       : editProdObs
 
     const { error } = await supabase
@@ -382,9 +413,9 @@ export default function App() {
       .eq('id', editandoProducido.id)
 
     if (error) {
-      alert('Error al actualizar producido: ' + error.message)
+      alert('Error al actualizar tarifa: ' + error.message)
     } else {
-      alert('¡Producido actualizado correctamente!')
+      alert('¡Tarifa actualizada correctamente!')
       setEditandoProducido(null)
       setDiaSeleccionadoModal(null)
       obtenerDatos()
@@ -392,12 +423,12 @@ export default function App() {
   }
 
   async function eliminarProducido(id, placa) {
-    if (!confirm(`¿Estás seguro de eliminar el registro de producido para la placa ${placa}?`)) return
+    if (!confirm(`¿Estás seguro de eliminar el registro de tarifa para la placa ${placa}?`)) return
 
     const { error } = await supabase.from('transacciones').delete().eq('id', id)
 
     if (error) {
-      alert('Error al eliminar producido: ' + error.message)
+      alert('Error al eliminar tarifa: ' + error.message)
     } else {
       alert('Registro eliminado correctamente')
       setDiaSeleccionadoModal(null)
@@ -431,7 +462,7 @@ export default function App() {
     setEditVehiculoId(item.vehiculo_id)
     setEditMonto(item.monto)
     setEditFecha(item.fecha)
-    setEditCategoria(item.categoria_gasto || 'Cambio de Aceite')
+    setEditCategoria(item.categoria_gasto === 'Lavado / Otros' ? 'Otros' : (item.categoria_gasto || 'Cambio de Aceite'))
     setEditObs(item.observaciones || '')
   }
 
@@ -580,8 +611,12 @@ export default function App() {
       return false
     }
 
-    if (filtroMantenimientoCategoria !== 'TODAS' && t.categoria_gasto !== filtroMantenimientoCategoria) {
-      return false
+    if (filtroMantenimientoCategoria !== 'TODAS') {
+      if (filtroMantenimientoCategoria === 'Otros') {
+        if (t.categoria_gasto !== 'Otros' && t.categoria_gasto !== 'Lavado / Otros') return false
+      } else if (t.categoria_gasto !== filtroMantenimientoCategoria) {
+        return false
+      }
     }
 
     if (filtroMantenimientoTexto.trim() !== '') {
@@ -698,7 +733,7 @@ export default function App() {
             tab === 'documentos' ? (darkMode ? 'bg-yellow-500 text-gray-950 shadow-sm' : 'bg-yellow-400 text-gray-900 shadow-sm') : (darkMode ? 'text-gray-400 hover:text-gray-100' : 'text-gray-500 hover:text-gray-900')
           }`}
         >
-          📄 Papeles
+          📄 Documentos
         </button>
         <button
           onClick={() => setTab('perfil')}
@@ -715,13 +750,37 @@ export default function App() {
         {/* 1. PESTAÑA: INICIO / DASHBOARD PRINCIPAL */}
         {tab === 'inicio' && (
           <div className="space-y-6">
+
+            {/* NOTIFICACIÓN URGENTE DE DOCUMENTOS PRÓXIMOS A VENCER (<= 5 DÍAS) */}
+            {documentosProximosVencer.length > 0 && (
+              <div className="p-4 rounded-xl border bg-red-950/40 border-red-600 shadow-lg space-y-2">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xl">🚨</span>
+                  <h3 className="text-sm font-black text-red-300 uppercase tracking-wide">¡Alerta Urgente: Documentos por Vencer!</h3>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  {documentosProximosVencer.map(doc => (
+                    <div key={doc.id} className="p-2.5 bg-red-900/40 rounded-lg border border-red-700 flex justify-between items-center text-xs">
+                      <div>
+                        <span className="font-extrabold text-white">Placa: {doc.vehiculos?.placa}</span>
+                        <p className="text-red-200">{doc.tipo_documento} (Vence: {doc.fecha_vencimiento})</p>
+                      </div>
+                      <span className="bg-red-600 text-white font-bold px-2.5 py-1 rounded-full">
+                        {doc.diasRestantes < 0 ? '¡Vencido!' : `¡Faltan ${doc.diasRestantes} días!`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
               <div className={`p-4 rounded-xl shadow border-l-4 border-green-500 ${bgCard}`}>
-                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Producido Hoy</p>
+                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Tarifas Hoy</p>
                 <p className="text-xl sm:text-2xl font-bold">${producidoHoy.toLocaleString()}</p>
               </div>
               <div className={`p-4 rounded-xl shadow border-l-4 border-emerald-600 ${bgCard}`}>
-                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Producido Mes</p>
+                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Tarifas Mes</p>
                 <p className="text-xl sm:text-2xl font-bold text-emerald-500">${producidoMes.toLocaleString()}</p>
               </div>
               <div className={`p-4 rounded-xl shadow border-l-4 border-blue-500 ${bgCard}`}>
@@ -729,7 +788,7 @@ export default function App() {
                 <p className="text-xl sm:text-2xl font-bold text-blue-400">${(producidoMes - gastosMes).toLocaleString()}</p>
               </div>
               <div className={`p-4 rounded-xl shadow border-l-4 border-red-500 ${bgCard}`}>
-                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Alertas Papeles</p>
+                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Alertas Documentos</p>
                 <p className="text-xl sm:text-2xl font-bold text-red-500">{alertasCount}</p>
               </div>
             </div>
@@ -781,7 +840,7 @@ export default function App() {
                       <div key={t.id} className={rowClass}>
                         <div>
                           <span className="font-bold">
-                            {t.vehiculos?.placa || 'N/A'} - {t.tipo_movimiento === 'producido' ? 'Ingreso' : (t.categoria_gasto || 'Gasto')}
+                            {t.vehiculos?.placa || 'N/A'} - {t.tipo_movimiento === 'producido' ? 'Tarifa' : (t.categoria_gasto || 'Gasto')}
                           </span>
                           <p className={`text-xs ${textMuted}`}>{t.observaciones || 'Sin detalles'} ({t.fecha})</p>
                         </div>
@@ -802,7 +861,7 @@ export default function App() {
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className={`p-5 rounded-xl shadow border-t-4 border-green-500 ${bgCard}`}>
-                <h2 className="text-base font-bold mb-3">💵 Registrar Producido Diario</h2>
+                <h2 className="text-base font-bold mb-3">💵 Registrar Tarifa Diaria</h2>
                 <form onSubmit={registrarProducido} className="space-y-3">
                   <select
                     value={vehiculoSeleccionado}
@@ -814,19 +873,38 @@ export default function App() {
                     ))}
                   </select>
 
-                  <label className={`flex items-center space-x-2 p-2.5 rounded-lg border cursor-pointer transition ${esPicoYPlaca ? 'bg-blue-900/40 border-blue-500 text-blue-300' : (darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200')}`}>
-                    <input
-                      type="checkbox"
-                      checked={esPicoYPlaca}
-                      onChange={(e) => {
-                        setEsPicoYPlaca(e.target.checked)
-                        if (e.target.checked) setMonto('0')
-                        else setMonto('')
-                      }}
-                      className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
-                    />
-                    <span className="text-xs font-bold">🚘 Es Pico y Placa (Producido $0)</span>
-                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className={`flex items-center space-x-2 p-2.5 rounded-lg border cursor-pointer transition ${esPicoYPlaca ? 'bg-blue-900/40 border-blue-500 text-blue-300' : (darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200')}`}>
+                      <input
+                        type="checkbox"
+                        checked={esPicoYPlaca}
+                        onChange={(e) => {
+                          setEsPicoYPlaca(e.target.checked)
+                          if (e.target.checked) {
+                            setEsDomingoFestivo(false)
+                            setMonto('0')
+                          } else {
+                            setMonto('')
+                          }
+                        }}
+                        className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
+                      />
+                      <span className="text-xs font-bold">🚘 Pico y Placa ($0)</span>
+                    </label>
+
+                    <label className={`flex items-center space-x-2 p-2.5 rounded-lg border cursor-pointer transition ${esDomingoFestivo ? 'bg-amber-900/40 border-amber-500 text-amber-300' : (darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200')}`}>
+                      <input
+                        type="checkbox"
+                        checked={esDomingoFestivo}
+                        onChange={(e) => {
+                          setEsDomingoFestivo(e.target.checked)
+                          if (e.target.checked) setEsPicoYPlaca(false)
+                        }}
+                        className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+                      />
+                      <span className="text-xs font-bold">🎉 Domingo / Festivo</span>
+                    </label>
+                  </div>
 
                   <div className="grid grid-cols-2 gap-2">
                     <input
@@ -849,7 +927,7 @@ export default function App() {
 
                   <input
                     type="text"
-                    placeholder={esPicoYPlaca ? "Obs opcional (ej: Restricción todo el día)" : "Obs: Turno día / Noche"}
+                    placeholder={esPicoYPlaca ? "Obs opcional (ej: Restricción todo el día)" : (esDomingoFestivo ? "Obs opcional (ej: Festivo nacional)" : "Obs: Turno día / Noche")}
                     value={observaciones}
                     onChange={(e) => setObservaciones(e.target.value)}
                     className={inputClass}
@@ -857,9 +935,9 @@ export default function App() {
 
                   <button
                     type="submit"
-                    className={`w-full font-bold p-2.5 rounded-lg text-sm transition text-white ${esPicoYPlaca ? 'bg-blue-600 hover:bg-blue-700' : 'bg-green-500 hover:bg-green-600'}`}
+                    className={`w-full font-bold p-2.5 rounded-lg text-sm transition text-white ${esPicoYPlaca ? 'bg-blue-600 hover:bg-blue-700' : (esDomingoFestivo ? 'bg-amber-600 hover:bg-amber-700' : 'bg-green-500 hover:bg-green-600')}`}
                   >
-                    {esPicoYPlaca ? 'Guardar Pico y Placa ($0)' : 'Guardar Producido'}
+                    {esPicoYPlaca ? 'Guardar Pico y Placa ($0)' : (esDomingoFestivo ? 'Guardar Tarifa Domingo / Festivo' : 'Guardar Tarifa')}
                   </button>
                 </form>
               </div>
@@ -886,7 +964,7 @@ export default function App() {
                     <option value="Repuestos / Piezas" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Repuestos / Piezas</option>
                     <option value="Taller / Mano de Obra" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Taller / Mano de Obra</option>
                     <option value="Llantas / Frenos" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Llantas / Frenos</option>
-                    <option value="Lavado / Otros" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Lavado / Otros</option>
+                    <option value="Otros" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Otros</option>
                   </select>
 
                   <div className="grid grid-cols-2 gap-2">
@@ -938,7 +1016,7 @@ export default function App() {
                       </div>
                       <div className="text-xs space-y-1">
                         <div className={`flex justify-between ${textMuted}`}>
-                          <span>Producido Total:</span>
+                          <span>Tarifas Total:</span>
                           <span className="font-bold text-green-400">+${item.producido.toLocaleString()}</span>
                         </div>
                         <div className={`flex justify-between ${textMuted}`}>
@@ -958,10 +1036,10 @@ export default function App() {
               )}
             </div>
 
-            {/* CALENDARIO DE PRODUCIDOS DÍA A DÍA */}
+            {/* CALENDARIO DE TARIFAS DÍA A DÍA */}
             <div className={`p-6 rounded-xl shadow border-t-4 border-green-500 ${bgCard}`}>
               <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-3">
-                <h2 className="text-lg font-bold">📅 Calendario de Producción Diaria</h2>
+                <h2 className="text-lg font-bold">📅 Calendario de Tarifas Diarias</h2>
                 <div className="flex items-center space-x-3">
                   <button
                     onClick={() => cambiarMesCalendario(-1)}
@@ -1107,7 +1185,7 @@ export default function App() {
                     <option value="Repuestos / Piezas" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Repuestos / Piezas</option>
                     <option value="Taller / Mano de Obra" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Taller / Mano de Obra</option>
                     <option value="Llantas / Frenos" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Llantas / Frenos</option>
-                    <option value="Lavado / Otros" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Lavado / Otros</option>
+                    <option value="Otros" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Otros</option>
                   </select>
                 </div>
 
@@ -1150,7 +1228,7 @@ export default function App() {
                               <div>
                                 <span className="font-bold">Placa: {item.vehiculos?.placa || 'N/A'}</span>
                                 <span className="ml-2 px-2 py-0.5 text-xs bg-purple-900/50 text-purple-300 font-bold rounded-md border border-purple-700">
-                                  {item.categoria_gasto || 'Mantenimiento'}
+                                  {item.categoria_gasto === 'Lavado / Otros' ? 'Otros' : (item.categoria_gasto || 'Mantenimiento')}
                                 </span>
                               </div>
                               <span className={`italic text-xs ${textMuted}`}>{item.observaciones || 'Sin detalles'}</span>
@@ -1201,18 +1279,20 @@ export default function App() {
               </div>
 
               <div className="flex justify-between items-center bg-gray-800/30 p-3 rounded-xl border">
-                <span className="text-sm font-bold">Total Producido:</span>
+                <span className="text-sm font-bold">Total Tarifas:</span>
                 <span className="text-base font-black text-green-400">${diaSeleccionadoModal.total.toLocaleString()}</span>
               </div>
 
               <div>
                 <h4 className="text-xs font-bold uppercase mb-2 text-gray-400">Taxis Registrados en esta fecha:</h4>
                 {diaSeleccionadoModal.registros.length === 0 ? (
-                  <p className={`text-sm italic py-4 text-center ${textMuted}`}>No hay registros en este día (Día en rojo / sin producción).</p>
+                  <p className={`text-sm italic py-4 text-center ${textMuted}`}>No hay registros en este día (Día en rojo / sin tarifa).</p>
                 ) : (
                   <div className="space-y-2 max-h-60 overflow-y-auto">
                     {diaSeleccionadoModal.registros.map(item => {
-                      const esPicoPlacaItem = (item.observaciones || '').toLowerCase().includes('pico y placa')
+                      const obsItem = (item.observaciones || '').toLowerCase()
+                      const esPicoPlacaItem = obsItem.includes('pico y placa')
+                      const esDomItem = obsItem.includes('domingo o festivo')
                       const placaTaxi = item.vehiculos?.placa || 'N/A'
                       return (
                         <div key={item.id} className={rowClass}>
@@ -1226,6 +1306,10 @@ export default function App() {
                               <span className="font-bold text-xs bg-blue-900/60 text-blue-300 px-2.5 py-1 rounded-full border border-blue-700">
                                 🚘 Pico y Placa ($0)
                               </span>
+                            ) : esDomItem ? (
+                              <span className="font-bold text-xs bg-amber-900/60 text-amber-300 px-2.5 py-1 rounded-full border border-amber-700">
+                                🎉 Festivo (+${Number(item.monto).toLocaleString()})
+                              </span>
                             ) : (
                               <span className="font-bold text-green-400">+${Number(item.monto).toLocaleString()}</span>
                             )}
@@ -1233,14 +1317,14 @@ export default function App() {
                             <button
                               onClick={() => abrirEdicionProducido(item)}
                               className="bg-yellow-400 hover:bg-yellow-500 text-gray-950 px-2 py-1 rounded text-xs font-bold transition shadow-sm"
-                              title="Editar este producido"
+                              title="Editar esta tarifa"
                             >
                               ✏️
                             </button>
                             <button
                               onClick={() => eliminarProducido(item.id, placaTaxi)}
                               className="bg-red-900/50 hover:bg-red-900 text-red-300 px-2 py-1 rounded text-xs font-bold transition border border-red-700 shadow-sm"
-                              title="Eliminar este producido"
+                              title="Eliminar esta tarifa"
                             >
                               🗑️
                             </button>
@@ -1262,12 +1346,12 @@ export default function App() {
           </div>
         )}
 
-        {/* MODAL DE EDICIÓN DE PRODUCIDO */}
+        {/* MODAL DE EDICIÓN DE TARIFA */}
         {editandoProducido && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
             <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border ${bgCard}`}>
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-bold">✏️ Editar Producido</h3>
+                <h3 className="text-lg font-bold">✏️ Editar Tarifa</h3>
                 <button
                   onClick={() => setEditandoProducido(null)}
                   className="text-gray-400 hover:text-gray-100 font-bold text-lg"
@@ -1290,18 +1374,36 @@ export default function App() {
                   </select>
                 </div>
 
-                <label className={`flex items-center space-x-2 p-2.5 rounded-lg border cursor-pointer transition ${editProdEsPicoYPlaca ? 'bg-blue-900/40 border-blue-500 text-blue-300' : (darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200')}`}>
-                  <input
-                    type="checkbox"
-                    checked={editProdEsPicoYPlaca}
-                    onChange={(e) => {
-                      setEditProdEsPicoYPlaca(e.target.checked)
-                      if (e.target.checked) setEditProdMonto('0')
-                    }}
-                    className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
-                  />
-                  <span className="text-xs font-bold">🚘 Es Pico y Placa (Producido $0)</span>
-                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className={`flex items-center space-x-2 p-2.5 rounded-lg border cursor-pointer transition ${editProdEsPicoYPlaca ? 'bg-blue-900/40 border-blue-500 text-blue-300' : (darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200')}`}>
+                    <input
+                      type="checkbox"
+                      checked={editProdEsPicoYPlaca}
+                      onChange={(e) => {
+                        setEditProdEsPicoYPlaca(e.target.checked)
+                        if (e.target.checked) {
+                          setEditProdEsDomingoFestivo(false)
+                          setEditProdMonto('0')
+                        }
+                      }}
+                      className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
+                    />
+                    <span className="text-xs font-bold">🚘 Pico y Placa ($0)</span>
+                  </label>
+
+                  <label className={`flex items-center space-x-2 p-2.5 rounded-lg border cursor-pointer transition ${editProdEsDomingoFestivo ? 'bg-amber-900/40 border-amber-500 text-amber-300' : (darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200')}`}>
+                    <input
+                      type="checkbox"
+                      checked={editProdEsDomingoFestivo}
+                      onChange={(e) => {
+                        setEditProdEsDomingoFestivo(e.target.checked)
+                        if (e.target.checked) setEditProdEsPicoYPlaca(false)
+                      }}
+                      className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+                    />
+                    <span className="text-xs font-bold">🎉 Domingo / Festivo</span>
+                  </label>
+                </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
@@ -1480,7 +1582,7 @@ export default function App() {
                     <option value="Repuestos / Piezas" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Repuestos / Piezas</option>
                     <option value="Taller / Mano de Obra" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Taller / Mano de Obra</option>
                     <option value="Llantas / Frenos" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Llantas / Frenos</option>
-                    <option value="Lavado / Otros" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Lavado / Otros</option>
+                    <option value="Otros" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Otros</option>
                   </select>
                 </div>
 
@@ -1713,11 +1815,11 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. PESTAÑA: DOCUMENTACIÓN */}
+        {/* 4. PESTAÑA: DOCUMENTOS */}
         {tab === 'documentos' && (
           <div className="space-y-6">
             <div className={`p-6 rounded-xl shadow border-t-4 border-blue-500 max-w-xl mx-auto ${bgCard}`}>
-              <h2 className="text-lg font-bold mb-1">📄 Actualizar / Registrar Vencimiento Papeles</h2>
+              <h2 className="text-lg font-bold mb-1">📄 Actualizar / Registrar Vencimiento Documentos</h2>
               <p className={`text-xs mb-4 ${textMuted}`}>Si ya existe el documento para esta placa, se actualizará la fecha sin duplicarse.</p>
               
               <form onSubmit={registrarDocumento} className="space-y-3">
