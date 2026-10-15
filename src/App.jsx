@@ -48,6 +48,7 @@ export default function App() {
 
   // Estados Perfil de Usuario
   const [perfilNombre, setPerfilNombre] = useState('')
+  const [perfilCorreo, setPerfilCorreo] = useState('')
   const [perfilAvatarUrl, setPerfilAvatarUrl] = useState('')
   const [guardandoPerfil, setGuardandoPerfil] = useState(false)
 
@@ -118,16 +119,18 @@ export default function App() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       if (session?.user) {
-        setPerfilNombre(session.user.user_metadata?.full_name || '')
-        setPerfilAvatarUrl(session.user.user_metadata?.avatar_url || '')
+        setPerfilCorreo(session.user.email || '')
+        setPerfilNombre(session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email?.split('@')[0] || '')
+        setPerfilAvatarUrl(session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || '')
       }
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
       if (session?.user) {
-        setPerfilNombre(session.user.user_metadata?.full_name || '')
-        setPerfilAvatarUrl(session.user.user_metadata?.avatar_url || '')
+        setPerfilCorreo(session.user.email || '')
+        setPerfilNombre(session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email?.split('@')[0] || '')
+        setPerfilAvatarUrl(session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || '')
       }
     })
 
@@ -149,13 +152,44 @@ export default function App() {
   const esAdmin = session?.user?.email === CORREO_ADMIN
 
   async function obtenerDatos() {
+    if (!session?.user) return
+
+    // 1. Obtener vehículos propios (o todos si es SuperAdmin)
     const { data: vData } = await supabase.from('vehiculos').select('*').order('id', { ascending: false })
     
-    // Filtrar vehículos ocultados por el Admin
-    const vVisibles = (vData || []).filter(v => !vehiculosOcultosAdmin.includes(v.id))
+    // 2. Obtener vehículos compartidos con este usuario por su correo
+    const { data: vCompartidosData } = await supabase
+      .from('vehiculos_compartidos')
+      .select('vehiculo_id, vehiculos(*)')
+      .eq('correo_invitado', session.user.email.toLowerCase().trim())
+
+    const listaVehiculosCompartidos = (vCompartidosData || [])
+      .map(item => item.vehiculos)
+      .filter(Boolean)
+      .map(v => ({ ...v, esCompartidoConmigo: true }))
+
+    // Consolidar lista eliminando duplicados
+    const mapaVehiculos = new Map()
+
+    ;(vData || []).forEach(v => {
+      mapaVehiculos.set(v.id, {
+        ...v,
+        esCompartidoConmigo: v.usuario_id !== session.user.id
+      })
+    })
+
+    listaVehiculosCompartidos.forEach(v => {
+      if (!mapaVehiculos.has(v.id)) {
+        mapaVehiculos.set(v.id, v)
+      }
+    })
+
+    const todosLosVehiculos = Array.from(mapaVehiculos.values())
+    const vVisibles = todosLosVehiculos.filter(v => !vehiculosOcultosAdmin.includes(v.id))
+    
     setVehiculos(vVisibles)
 
-    const idsVehiculosValidos = new Set((vData || []).map(v => v.id))
+    const idsVehiculosValidos = new Set(vVisibles.map(v => v.id))
 
     if (vVisibles && vVisibles.length > 0) {
       setVehiculoSeleccionado(vVisibles[0].id)
@@ -170,7 +204,6 @@ export default function App() {
       .order('id', { ascending: false })
     setConductores(cData || [])
 
-    // Traer transacciones y filtrar solo las que tengan un vehículo existente válido
     const { data: tData } = await supabase
       .from('transacciones')
       .select('*, vehiculos(placa)')
@@ -179,7 +212,6 @@ export default function App() {
     const transaccionesValidas = (tData || []).filter(t => idsVehiculosValidos.has(t.vehiculo_id))
     setTransacciones(transaccionesValidas)
 
-    // Traer documentos y filtrar solo los que tengan un vehículo existente válido
     const { data: dData } = await supabase
       .from('documentos')
       .select('*, vehiculos(placa)')
@@ -317,7 +349,7 @@ export default function App() {
     setCompartiendoState(false)
 
     if (error) {
-      alert('No se pudo compartir. Verifica si la tabla `vehiculos_compartidos` existe en Supabase.\n\nError: ' + error.message)
+      alert('No se pudo compartir. Verifica las políticas RLS en Supabase.\n\nError: ' + error.message)
     } else {
       alert(`¡Taxi con placa ${vehiculoDetalle.placa} compartido con éxito a ${correoCompartir}!`)
       setCorreoCompartir('')
@@ -334,10 +366,29 @@ export default function App() {
     else obtenerDatos()
   }
 
-  // Eliminar para Administrador (Ocultar de la vista) o Eliminar definitivo para Propietario
   async function eliminarVehiculo(v) {
     const esPropietarioDirecto = v.usuario_id === session.user.id
 
+    // CASO 1: Si es un usuario invitado (no es dueño directo ni admin)
+    if (!esPropietarioDirecto && !esAdmin) {
+      if (!confirm(`¿Deseas eliminar de tu perfil el taxi compartido (${v.placa})?\n\nNota: Esto solo quitará el vehículo de tu cuenta, no afectará al dueño original.`)) return
+
+      const { error } = await supabase
+        .from('vehiculos_compartidos')
+        .delete()
+        .eq('vehiculo_id', v.id)
+        .eq('correo_invitado', session.user.email.toLowerCase().trim())
+
+      if (error) {
+        alert('Error al desvincular el taxi compartido: ' + error.message)
+      } else {
+        alert(`Taxi ${v.placa} eliminado de tu perfil.`)
+        obtenerDatos()
+      }
+      return
+    }
+
+    // CASO 2: MODO SUPERADMIN (Ocultar vista propia)
     if (esAdmin && !esPropietarioDirecto) {
       const resp = confirm(`👑 MODO ADMINISTRADOR:\n¿Deseas quitar el vehículo ${v.placa} únicamente de tu vista sin afectar los datos del dueño original?`)
       if (resp) {
@@ -350,13 +401,15 @@ export default function App() {
       return
     }
 
-    if (!confirm(`¿Estás seguro de eliminar el taxi con placa ${v.placa}? Esta acción eliminará permanentemente el registro.`)) return
+    // CASO 3: EL PROPIETARIO REAL BORRA DEFINITIVAMENTE
+    if (!confirm(`¿Estás seguro de eliminar permanentemente el taxi con placa ${v.placa}? Esta acción no se puede deshacer.`)) return
 
     const { error } = await supabase.from('vehiculos').delete().eq('id', v.id)
 
     if (error) {
-      alert('No se pudo eliminar el vehículo. Si tiene transacciones o documentos asociados, primero elimina sus registros.')
+      alert('No se pudo eliminar el vehículo. ' + error.message)
     } else {
+      alert(`Taxi ${v.placa} eliminado por completo.`)
       obtenerDatos()
     }
   }
@@ -378,46 +431,6 @@ export default function App() {
       setTelefonoConductor('')
       obtenerDatos()
     }
-  }
-
-  function abrirEdicionConductor(c) {
-    setEditandoConductor(c)
-    setEditCondNombre(c.nombre)
-    setEditCondTelefono(c.telefono || '')
-    setEditCondTurno(c.turno || 'Día')
-    setEditCondVehiculoId(c.vehiculo_id || '')
-  }
-
-  async function guardarEdicionConductor(e) {
-    e.preventDefault()
-    if (!editandoConductor) return
-
-    const { error } = await supabase
-      .from('conductores')
-      .update({
-        nombre: editCondNombre,
-        telefono: editCondTelefono,
-        turno: editCondTurno,
-        vehiculo_id: editCondVehiculoId || null
-      })
-      .eq('id', editandoConductor.id)
-
-    if (error) {
-      alert('Error actualizando conductor: ' + error.message)
-    } else {
-      alert('¡Conductor actualizado correctamente!')
-      setEditandoConductor(null)
-      obtenerDatos()
-    }
-  }
-
-  async function eliminarConductor(id, nombre) {
-    if (!confirm(`¿Estás seguro de eliminar al conductor ${nombre}?`)) return
-
-    const { error } = await supabase.from('conductores').delete().eq('id', id)
-
-    if (error) alert('Error al eliminar conductor: ' + error.message)
-    else obtenerDatos()
   }
 
   async function registrarProducido(e) {
@@ -578,7 +591,7 @@ export default function App() {
     e.preventDefault()
     if (!editandoGasto) return
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('transacciones')
       .update({
         vehiculo_id: editVehiculoId,
@@ -588,9 +601,12 @@ export default function App() {
         observaciones: editObs
       })
       .eq('id', editandoGasto.id)
+      .select()
 
     if (error) {
       alert('Error al actualizar mantenimiento: ' + error.message)
+    } else if (!data || data.length === 0) {
+      alert('⚠️ No se pudo actualizar el registro. Verifica los permisos de Supabase.')
     } else {
       alert('¡Mantenimiento actualizado correctamente!')
       setEditandoGasto(null)
@@ -671,24 +687,6 @@ export default function App() {
     )
   ).sort().reverse()
 
-  const resumenMesAMes = mesesDisponibles.map((mes) => {
-    const producidosMes = transacciones
-      .filter(t => t.fecha && t.fecha.startsWith(mes) && t.tipo_movimiento === 'producido')
-      .reduce((acc, curr) => acc + Number(curr.monto), 0)
-
-    const gastosMes = transacciones
-      .filter(t => t.fecha && t.fecha.startsWith(mes) && t.tipo_movimiento === 'gasto')
-      .reduce((acc, curr) => acc + Number(curr.monto), 0)
-
-    return {
-      mes,
-      producido: producidosMes,
-      gastos: gastosMes,
-      gananciaNeta: producidosMes - gastosMes
-    }
-  })
-
-  // Funciones de ayuda para el Calendario
   const nombresMeses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
 
   function cambiarMesCalendario(direccion) {
@@ -741,7 +739,6 @@ export default function App() {
     return true
   })
 
-  // Calcular el total invertido en mantenimientos en el mes actual
   const hoyStr = new Date().toISOString().split('T')[0]
   const mesActualStr = hoyStr.substring(0, 7)
   const totalMantenimientosMes = transacciones
@@ -757,8 +754,8 @@ export default function App() {
 
   if (!session) return <Auth />
 
-  const usuarioNombre = session.user?.user_metadata?.full_name || session.user?.email?.split('@')[0]
-  const usuarioAvatar = session.user?.user_metadata?.avatar_url
+  const usuarioNombre = perfilNombre || session.user?.user_metadata?.full_name || session.user?.email?.split('@')[0]
+  const usuarioAvatar = perfilAvatarUrl || session.user?.user_metadata?.avatar_url || session.user?.user_metadata?.picture
 
   const bgMain = darkMode ? 'bg-gray-950 text-gray-100' : 'bg-gray-100 text-gray-900'
   const bgCard = darkMode ? 'bg-gray-900 border-gray-800 text-gray-100' : 'bg-white border-gray-200 text-gray-900'
@@ -802,7 +799,6 @@ export default function App() {
           <button
             onClick={toggleDarkMode}
             className="bg-gray-900 text-yellow-400 hover:bg-gray-800 p-2.5 rounded-lg text-xs font-bold transition shadow"
-            title="Cambiar Modo"
           >
             {darkMode ? '☀️ Claro' : '🌙 Oscuro'}
           </button>
@@ -865,8 +861,6 @@ export default function App() {
         {/* 1. PESTAÑA: INICIO / DASHBOARD PRINCIPAL */}
         {tab === 'inicio' && (
           <div className="space-y-6">
-
-            {/* NOTIFICACIÓN URGENTE DE DOCUMENTOS PRÓXIMOS A VENCER (<= 5 DÍAS) */}
             {documentosProximosVencer.length > 0 && (
               <div className="p-4 rounded-xl border bg-red-950/40 border-red-600 shadow-lg space-y-2">
                 <div className="flex items-center space-x-2">
@@ -922,10 +916,15 @@ export default function App() {
                   <div className="space-y-3">
                     {vehiculos.map((v) => (
                       <div key={v.id} className={rowClass}>
-                        <div>
+                        <div className="flex items-center space-x-2">
                           <span className="bg-yellow-400 text-gray-950 font-extrabold px-2.5 py-1 rounded text-sm tracking-wider">
                             {v.placa}
                           </span>
+                          {v.esCompartidoConmigo && (
+                            <span className="bg-blue-900/60 text-blue-300 font-extrabold text-[10px] px-2 py-0.5 rounded border border-blue-700">
+                              🤝 Compartido contigo
+                            </span>
+                          )}
                           <p className={`text-xs mt-1 ${textMuted}`}>{v.marca ? `${v.marca} ${v.modelo || ''}` : 'Taxi activo'}</p>
                         </div>
                         <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${
@@ -984,7 +983,9 @@ export default function App() {
                     className={selectClass}
                   >
                     {vehiculos.map((v) => (
-                      <option key={v.id} value={v.id} className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Placa: {v.placa}</option>
+                      <option key={v.id} value={v.id} className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>
+                        Placa: {v.placa} {v.esCompartidoConmigo ? '(Compartido contigo)' : ''}
+                      </option>
                     ))}
                   </select>
 
@@ -1042,7 +1043,7 @@ export default function App() {
 
                   <input
                     type="text"
-                    placeholder={esPicoYPlaca ? "Obs opcional (ej: Restricción todo el día)" : (esDomingoFestivo ? "Obs opcional (ej: Festivo nacional)" : "Obs: Turno día / Noche")}
+                    placeholder="Obs: Turno día / Noche"
                     value={observaciones}
                     onChange={(e) => setObservaciones(e.target.value)}
                     className={inputClass}
@@ -1052,7 +1053,7 @@ export default function App() {
                     type="submit"
                     className={`w-full font-bold p-2.5 rounded-lg text-sm transition text-white ${esPicoYPlaca ? 'bg-blue-600 hover:bg-blue-700' : (esDomingoFestivo ? 'bg-amber-600 hover:bg-amber-700' : 'bg-green-500 hover:bg-green-600')}`}
                   >
-                    {esPicoYPlaca ? 'Guardar Pico y Placa ($0)' : (esDomingoFestivo ? 'Guardar Tarifa Domingo / Festivo' : 'Guardar Tarifa')}
+                    Guardar Tarifa
                   </button>
                 </form>
               </div>
@@ -1066,7 +1067,9 @@ export default function App() {
                     className={selectClass}
                   >
                     {vehiculos.map((v) => (
-                      <option key={v.id} value={v.id} className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Placa: {v.placa}</option>
+                      <option key={v.id} value={v.id} className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>
+                        Placa: {v.placa} {v.esCompartidoConmigo ? '(Compartido contigo)' : ''}
+                      </option>
                     ))}
                   </select>
 
@@ -1118,39 +1121,6 @@ export default function App() {
               </div>
             </div>
 
-            <div className={`p-6 rounded-xl shadow border-t-4 border-blue-600 ${bgCard}`}>
-              <h2 className="text-lg font-bold mb-4">📈 Resumen de Ganancias Mes a Mes</h2>
-              {resumenMesAMes.length === 0 ? (
-                <p className={`text-sm ${textMuted}`}>No hay registros de transacciones para mostrar el historial mensual.</p>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                  {resumenMesAMes.map((item) => (
-                    <div key={item.mes} className={`p-4 border rounded-xl shadow-sm space-y-2 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50'}`}>
-                      <div className="flex justify-between items-center border-b pb-2">
-                        <span className="font-extrabold text-sm">📆 Mes: {item.mes}</span>
-                      </div>
-                      <div className="text-xs space-y-1">
-                        <div className={`flex justify-between ${textMuted}`}>
-                          <span>Tarifas Total:</span>
-                          <span className="font-bold text-green-400">+${item.producido.toLocaleString()}</span>
-                        </div>
-                        <div className={`flex justify-between ${textMuted}`}>
-                          <span>Gastos / Mantenimiento:</span>
-                          <span className="font-bold text-red-400">-${item.gastos.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between text-sm font-black border-t pt-2 mt-1">
-                          <span>Ganancia Neta:</span>
-                          <span className={item.gananciaNeta >= 0 ? 'text-blue-400' : 'text-red-400'}>
-                            ${item.gananciaNeta.toLocaleString()}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
             {/* CALENDARIO DE TARIFAS DÍA A DÍA */}
             <div className={`p-6 rounded-xl shadow border-t-4 border-green-500 ${bgCard}`}>
               <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-3">
@@ -1190,7 +1160,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Cuadrícula de Días de la Semana */}
+              {/* Días de la Semana */}
               <div className="grid grid-cols-7 gap-2 text-center mb-2 font-bold text-xs">
                 <span className={textMuted}>Lun</span>
                 <span className={textMuted}>Mar</span>
@@ -1264,7 +1234,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* HISTORIAL DE MANTENIMIENTOS (CON TOTAL INVERTIDO EN EL MES) */}
+            {/* HISTORIAL DE MANTENIMIENTOS */}
             <div className={`p-6 rounded-xl shadow border-t-4 border-purple-500 ${bgCard}`}>
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
                 <div>
@@ -1281,7 +1251,7 @@ export default function App() {
                   <label className="block text-xs font-bold mb-1">🔍 Buscar Nota o Placa</label>
                   <input
                     type="text"
-                    placeholder="Ej: pastillas, WPO841..."
+                    placeholder="Ej: pastillas, TEP048..."
                     value={filtroMantenimientoTexto}
                     onChange={(e) => setFiltroMantenimientoTexto(e.target.value)}
                     className={inputClass}
@@ -1320,11 +1290,7 @@ export default function App() {
               </div>
 
               {Object.keys(mantenimientosPorFecha).length === 0 ? (
-                <p className={`text-sm py-4 text-center ${textMuted}`}>
-                  {filtroMantenimientoTexto || filtroMantenimientoCategoria !== 'TODAS' || filtroMantenimientoMes !== 'TODOS'
-                    ? 'No se encontraron mantenimientos con los filtros aplicados.'
-                    : 'No hay mantenimientos o repuestos registrados aún.'}
-                </p>
+                <p className={`text-sm py-4 text-center ${textMuted}`}>No hay mantenimientos registrados.</p>
               ) : (
                 <div className="space-y-4 max-h-80 overflow-y-auto">
                   {Object.entries(mantenimientosPorFecha).map(([fecha, lista]) => {
@@ -1343,7 +1309,7 @@ export default function App() {
                               <div>
                                 <span className="font-bold">Placa: {item.vehiculos?.placa || 'N/A'}</span>
                                 <span className="ml-2 px-2 py-0.5 text-xs bg-purple-900/50 text-purple-300 font-bold rounded-md border border-purple-700">
-                                  {item.categoria_gasto === 'Lavado / Otros' ? 'Otros' : (item.categoria_gasto || 'Mantenimiento')}
+                                  {item.categoria_gasto}
                                 </span>
                               </div>
                               <span className={`italic text-xs ${textMuted}`}>{item.observaciones || 'Sin detalles'}</span>
@@ -1352,14 +1318,12 @@ export default function App() {
                                 <button
                                   onClick={() => abrirEdicionMantenimiento(item)}
                                   className="bg-yellow-400 hover:bg-yellow-500 text-gray-950 px-2 py-1 rounded text-xs font-bold transition shadow-sm"
-                                  title="Editar este mantenimiento"
                                 >
                                   ✏️
                                 </button>
                                 <button
                                   onClick={() => eliminarMantenimiento(item.id)}
                                   className="bg-red-900/50 hover:bg-red-900 text-red-300 px-2 py-1 rounded text-xs font-bold transition border border-red-700 shadow-sm"
-                                  title="Eliminar este mantenimiento"
                                 >
                                   🗑️
                                 </button>
@@ -1376,7 +1340,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. PESTAÑA: FLOTA Y PERSONAL */}
+        {/* 3. PESTAÑA: FLOTA */}
         {tab === 'flota' && (
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1385,7 +1349,7 @@ export default function App() {
                 <form onSubmit={agregarVehiculo} className="space-y-3">
                   <input
                     type="text"
-                    placeholder="Placa (ej: WPO841)"
+                    placeholder="Placa (ej: TEP048)"
                     value={placa}
                     onChange={(e) => setPlaca(e.target.value)}
                     className={inputClass + ' uppercase'}
@@ -1471,31 +1435,22 @@ export default function App() {
             </div>
 
             <div className={`p-6 rounded-xl shadow ${bgCard}`}>
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-bold">🚕 Administrar Vehículos ({vehiculos.length})</h2>
-                {esAdmin && (
-                  <span className="text-xs text-yellow-400 font-bold bg-yellow-900/30 px-3 py-1 rounded-lg border border-yellow-600/50">
-                    👑 Vista Global Activa
-                  </span>
-                )}
-              </div>
-
+              <h2 className="text-lg font-bold mb-4">🚕 Administrar Vehículos ({vehiculos.length})</h2>
               {vehiculos.length === 0 ? (
-                <p className={`text-sm ${textMuted}`}>No hay vehículos registrados.</p>
+                <p className={`text-sm ${textMuted}`}>No hay vehículos registrados ni compartidos contigo.</p>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {vehiculos.map((v) => {
-                    const esMiVehiculo = v.usuario_id === session.user.id
                     return (
                       <div key={v.id} className={`p-4 border rounded-xl flex justify-between items-center transition hover:border-yellow-400 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50'}`}>
                         <div className="cursor-pointer space-y-1" onClick={() => setVehiculoDetalle(v)}>
-                          <div className="flex items-center space-x-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
                             <span className="bg-yellow-400 text-gray-950 font-extrabold px-3 py-1 rounded text-sm tracking-wider">
                               {v.placa}
                             </span>
-                            {esAdmin && !esMiVehiculo && (
-                              <span className="bg-blue-900/60 text-blue-300 font-extrabold text-[10px] px-2 py-0.5 rounded border border-blue-700">
-                                De otro usuario
+                            {v.esCompartidoConmigo && (
+                              <span className="bg-blue-900/70 text-blue-300 font-extrabold text-[10px] px-2 py-0.5 rounded border border-blue-700 shadow-sm">
+                                🤝 Compartido contigo
                               </span>
                             )}
                           </div>
@@ -1525,7 +1480,7 @@ export default function App() {
                           <button
                             onClick={() => setVehiculoDetalle(v)}
                             className="bg-blue-600 hover:bg-blue-700 text-white p-1.5 rounded-lg text-xs font-bold transition shadow-sm"
-                            title="Ver detalle / Compartir"
+                            title="Ver detalles y compartir"
                           >
                             👁️
                           </button>
@@ -1533,7 +1488,7 @@ export default function App() {
                           <button
                             onClick={() => eliminarVehiculo(v)}
                             className="bg-red-900/50 hover:bg-red-900 text-red-300 p-1.5 rounded-lg text-xs font-bold transition border border-red-700"
-                            title={esAdmin && !esMiVehiculo ? "Quitar de mi vista de administrador" : "Eliminar vehículo"}
+                            title={v.esCompartidoConmigo ? 'Quitar de mi lista' : 'Eliminar vehículo'}
                           >
                             🗑️
                           </button>
@@ -1544,55 +1499,15 @@ export default function App() {
                 </div>
               )}
             </div>
-
-            <div className={`p-6 rounded-xl shadow ${bgCard}`}>
-              <h2 className="text-lg font-bold mb-4">👨‍✈️ Administrar Conductores ({conductores.length})</h2>
-              {conductores.length === 0 ? (
-                <p className={`text-sm ${textMuted}`}>No hay conductores registrados aún.</p>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {conductores.map((c) => (
-                    <div key={c.id} className={rowClass}>
-                      <div>
-                        <span className="font-bold">{c.nombre}</span>
-                        <p className={`text-xs mt-0.5 ${textMuted}`}>
-                          {c.telefono ? `Tel: ${c.telefono}` : 'Sin teléfono'} | Turno: {c.turno}
-                        </p>
-                        <span className="inline-block mt-1 bg-orange-900/50 text-orange-300 text-xs px-2 py-0.5 rounded font-semibold border border-orange-700">
-                          {c.vehiculos?.placa ? `Placa: ${c.vehiculos.placa}` : 'Sin Taxi Asignado'}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center space-x-2">
-                        <button
-                          onClick={() => abrirEdicionConductor(c)}
-                          className="bg-yellow-400 hover:bg-yellow-500 text-gray-950 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm"
-                          title="Editar conductor"
-                        >
-                          ✏️
-                        </button>
-                        <button
-                          onClick={() => eliminarConductor(c.id, c.nombre)}
-                          className="bg-red-900/50 hover:bg-red-900 text-red-300 px-2.5 py-1.5 rounded-lg text-xs font-bold transition border border-red-700"
-                          title="Eliminar conductor"
-                        >
-                          🗑️
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
         )}
 
         {/* MODAL EDITAR CARACTERÍSTICAS DEL VEHÍCULO */}
         {editandoVehiculo && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
             <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border space-y-4 ${bgCard}`}>
               <div className="flex justify-between items-center border-b pb-3">
-                <h3 className="text-base font-extrabold">✏️ Editar Características del Vehículo</h3>
+                <h3 className="text-base font-extrabold">✏️ Editar Taxi ({editandoVehiculo.placa})</h3>
                 <button
                   onClick={() => setEditandoVehiculo(null)}
                   className="text-gray-400 hover:text-gray-100 font-bold text-lg"
@@ -1621,7 +1536,6 @@ export default function App() {
                       value={editMarca}
                       onChange={(e) => setEditMarca(e.target.value)}
                       className={inputClass}
-                      placeholder="Ej: Kia"
                     />
                   </div>
                   <div>
@@ -1631,7 +1545,6 @@ export default function App() {
                       value={editModelo}
                       onChange={(e) => setEditModelo(e.target.value)}
                       className={inputClass}
-                      placeholder="Ej: 2018"
                     />
                   </div>
                 </div>
@@ -1656,181 +1569,359 @@ export default function App() {
           </div>
         )}
 
-        {/* MODAL VER DETALLE DE VEHÍCULO / REPORTE FINANCIERO Y COMPARTIR */}
-        {vehiculoDetalle && (() => {
-          const transVehiculo = transacciones.filter(t => t.vehiculo_id === vehiculoDetalle.id)
-          const tarifasVehiculo = transVehiculo.filter(t => t.tipo_movimiento === 'producido')
-          const gastosVehiculo = transacciones.filter(t => t.vehiculo_id === vehiculoDetalle.id && t.tipo_movimiento === 'gasto')
-
-          const hoyStr = new Date().toISOString().split('T')[0]
-          const mesActualStr = hoyStr.substring(0, 7)
-
-          const totalTarifasGlobal = tarifasVehiculo.reduce((acc, curr) => acc + Number(curr.monto), 0)
-          const totalTarifasMes = tarifasVehiculo.filter(t => t.fecha && t.fecha.startsWith(mesActualStr)).reduce((acc, curr) => acc + Number(curr.monto), 0)
-          
-          const totalGastosGlobal = gastosVehiculo.reduce((acc, curr) => acc + Number(curr.monto), 0)
-          const totalGastosMes = gastosVehiculo.filter(t => t.fecha && t.fecha.startsWith(mesActualStr)).reduce((acc, curr) => acc + Number(curr.monto), 0)
-
-          const gananciaNetaGlobal = totalTarifasGlobal - totalGastosGlobal
-          const gananciaNetaMes = totalTarifasMes - totalGastosMes
-
-          const conductorAsignado = conductores.find(c => c.vehiculo_id === vehiculoDetalle.id)
-          const esPropietarioDirecto = vehiculoDetalle.usuario_id === session.user.id
-
-          return (
-            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 z-50 overflow-y-auto">
-              <div className={`w-full max-w-2xl p-5 sm:p-6 rounded-2xl shadow-2xl border space-y-5 my-8 ${bgCard}`}>
-                <div className="flex justify-between items-center border-b pb-3">
-                  <div className="flex items-center space-x-3">
-                    <span className="bg-yellow-400 text-gray-950 font-black text-xl px-3 py-1 rounded-lg">
-                      {vehiculoDetalle.placa}
-                    </span>
-                    <div>
-                      <h3 className="text-base font-extrabold">{vehiculoDetalle.marca ? `${vehiculoDetalle.marca} ${vehiculoDetalle.modelo || ''}` : 'Taxi'}</h3>
-                      <p className={`text-xs ${textMuted}`}>Conductor: {conductorAsignado ? `${conductorAsignado.nombre} (${conductorAsignado.turno})` : 'Sin asignar'}</p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => abrirEdicionVehiculo(vehiculoDetalle)}
-                      className="bg-yellow-400 hover:bg-yellow-500 text-gray-950 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm flex items-center space-x-1"
-                    >
-                      <span>✏️ Editar Taxi</span>
-                    </button>
-                    <button
-                      onClick={() => setVehiculoDetalle(null)}
-                      className="text-gray-400 hover:text-gray-100 font-bold text-xl px-2"
-                    >
-                      ✕
-                    </button>
-                  </div>
+        {/* MODAL DETALLE DE VEHÍCULO Y REPORTE FINANCIERO */}
+        {vehiculoDetalle && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className={`w-full max-w-lg p-6 rounded-2xl shadow-2xl border space-y-5 max-h-[90vh] overflow-y-auto ${bgCard}`}>
+              <div className="flex justify-between items-center border-b pb-3">
+                <div className="flex items-center space-x-2">
+                  <span className="bg-yellow-400 text-gray-950 font-extrabold px-3 py-1 rounded text-base tracking-wider">
+                    {vehiculoDetalle.placa}
+                  </span>
+                  <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${
+                    vehiculoDetalle.estado === 'Activo' ? 'bg-green-900/50 text-green-300' : 'bg-yellow-900/50 text-yellow-300'
+                  }`}>
+                    {vehiculoDetalle.estado || 'Activo'}
+                  </span>
                 </div>
-
-                {/* Info exclusiva Administrador */}
-                {esAdmin && (
-                  <div className="p-3 bg-yellow-950/30 border border-yellow-600/50 rounded-xl text-xs space-y-1">
-                    <div className="flex justify-between font-bold">
-                      <span className="text-yellow-400">👑 Información de Propiedad (Admin):</span>
-                      <span className={esPropietarioDirecto ? 'text-green-400' : 'text-blue-400'}>
-                        {esPropietarioDirecto ? 'Registrado por ti' : 'Vehículo de un Usuario Registrado'}
-                      </span>
-                    </div>
-                    <p className={textMuted}>ID Propietario en Supabase: <span className="font-mono text-[10px]">{vehiculoDetalle.usuario_id || 'N/A'}</span></p>
-                  </div>
-                )}
-
-                {/* Opción para Compartir este Vehículo */}
-                <div className={`p-4 rounded-xl border ${darkMode ? 'bg-gray-800/80 border-gray-700' : 'bg-blue-50/60 border-blue-200'}`}>
-                  <h4 className="text-xs font-bold uppercase mb-2 text-blue-400 flex items-center space-x-1">
-                    <span>👥 Compartir este vehículo con otro usuario</span>
-                  </h4>
-                  <form onSubmit={compartirVehiculo} className="flex gap-2">
-                    <input
-                      type="email"
-                      placeholder="Correo del usuario (ej: familiar@gmail.com)"
-                      value={correoCompartir}
-                      onChange={(e) => setCorreoCompartir(e.target.value)}
-                      className={inputClass + ' text-xs'}
-                      required
-                    />
-                    <button
-                      type="submit"
-                      disabled={compartiendoState}
-                      className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-lg text-xs transition whitespace-nowrap"
-                    >
-                      {compartiendoState ? 'Enviando...' : 'Compartir'}
-                    </button>
-                  </form>
-                </div>
-
-                {/* Tarjetas resumen de este vehiculo */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  <div className={`p-3 rounded-xl border ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-green-50 border-green-200'}`}>
-                    <p className={`text-[11px] font-bold uppercase ${textMuted}`}>Tarifas Acumuladas</p>
-                    <p className="text-base font-extrabold text-green-400">\${totalTarifasGlobal.toLocaleString()}</p>
-                    <p className={`text-[10px] ${textMuted}`}>Mes: \${totalTarifasMes.toLocaleString()}</p>
-                  </div>
-
-                  <div className={`p-3 rounded-xl border ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-red-50 border-red-200'}`}>
-                    <p className={`text-[11px] font-bold uppercase ${textMuted}`}>Mantenimientos / Gastos</p>
-                    <p className="text-base font-extrabold text-red-400">-\${totalGastosGlobal.toLocaleString()}</p>
-                    <p className={`text-[10px] ${textMuted}`}>Mes: -\${totalGastosMes.toLocaleString()}</p>
-                  </div>
-
-                  <div className={`col-span-2 sm:col-span-1 p-3 rounded-xl border ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-blue-50 border-blue-200'}`}>
-                    <p className={`text-[11px] font-bold uppercase ${textMuted}`}>Ganancia Neta Taxi</p>
-                    <p className={`text-base font-black ${gananciaNetaGlobal >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
-                      \${gananciaNetaGlobal.toLocaleString()}
-                    </p>
-                    <p className={`text-[10px] ${textMuted}`}>Mes: \${gananciaNetaMes.toLocaleString()}</p>
-                  </div>
-                </div>
-
-                {/* Seccion de historial de tarifas del carro */}
-                <div>
-                  <h4 className="text-xs font-bold uppercase mb-2 text-yellow-400 flex justify-between items-center">
-                    <span>💵 Historial de Tarifas ({tarifasVehiculo.length})</span>
-                  </h4>
-                  {tarifasVehiculo.length === 0 ? (
-                    <p className={`text-xs italic py-2 ${textMuted}`}>No hay tarifas registradas para este taxi.</p>
-                  ) : (
-                    <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                      {tarifasVehiculo.map(t => (
-                        <div key={t.id} className="p-2 border rounded-lg bg-gray-800/40 border-gray-700 flex justify-between items-center text-xs">
-                          <div>
-                            <span className="font-bold">{t.fecha}</span>
-                            <span className={`ml-2 ${textMuted}`}>{t.observaciones || 'Tarifa normal'}</span>
-                          </div>
-                          <span className="font-bold text-green-400">+\${Number(t.monto).toLocaleString()}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Seccion de historial de mantenimientos del carro */}
-                <div>
-                  <h4 className="text-xs font-bold uppercase mb-2 text-purple-400 flex justify-between items-center">
-                    <span>🛠️ Historial de Mantenimientos y Repuestos ({gastosVehiculo.length})</span>
-                  </h4>
-                  {gastosVehiculo.length === 0 ? (
-                    <p className={`text-xs italic py-2 ${textMuted}`}>No hay mantenimientos registrados para este taxi.</p>
-                  ) : (
-                    <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                      {gastosVehiculo.map(g => (
-                        <div key={g.id} className="p-2 border rounded-lg bg-gray-800/40 border-gray-700 flex justify-between items-center text-xs">
-                          <div>
-                            <span className="font-bold">{g.fecha}</span>
-                            <span className="ml-2 px-1.5 py-0.5 text-[10px] bg-purple-900/50 text-purple-300 font-bold rounded border border-purple-700">
-                              {g.categoria_gasto}
-                            </span>
-                            <p className={`text-[11px] ${textMuted}`}>{g.observaciones || 'Sin detalles'}</p>
-                          </div>
-                          <span className="font-bold text-red-400">-\${Number(g.monto).toLocaleString()}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
                 <button
                   onClick={() => setVehiculoDetalle(null)}
-                  className="w-full bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
+                  className="text-gray-400 hover:text-gray-100 font-bold text-xl px-2"
                 >
-                  Cerrar
+                  ✕
                 </button>
               </div>
+
+              {/* Módulo Compartir Taxi por Correo */}
+              <div className="p-4 border rounded-xl bg-blue-950/30 border-blue-800 space-y-2">
+                <h4 className="text-xs font-extrabold text-blue-300 uppercase tracking-wide">🤝 Compartir este taxi con otro usuario</h4>
+                <p className={`text-xs ${textMuted}`}>Ingresa el correo del usuario registrado para darle acceso a ver y gestionar este taxi.</p>
+                <form onSubmit={compartirVehiculo} className="flex gap-2 pt-1">
+                  <input
+                    type="email"
+                    placeholder="correo@ejemplo.com"
+                    value={correoCompartir}
+                    onChange={(e) => setCorreoCompartir(e.target.value)}
+                    className={inputClass}
+                    required
+                  />
+                  <button
+                    type="submit"
+                    disabled={compartiendoState}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2.5 rounded-lg text-xs whitespace-nowrap transition"
+                  >
+                    {compartiendoState ? 'Enviando...' : 'Compartir'}
+                  </button>
+                </form>
+              </div>
+
+              {/* Balance Financiero Específico del Vehículo */}
+              {(() => {
+                const prodVehiculo = transacciones
+                  .filter(t => t.vehiculo_id === vehiculoDetalle.id && t.tipo_movimiento === 'producido')
+                  .reduce((a, c) => a + Number(c.monto), 0)
+                const gastVehiculo = transacciones
+                  .filter(t => t.vehiculo_id === vehiculoDetalle.id && t.tipo_movimiento === 'gasto')
+                  .reduce((a, c) => a + Number(c.monto), 0)
+                const netoVehiculo = prodVehiculo - gastVehiculo
+
+                return (
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-bold">📊 Reporte Financiero General</h4>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="p-3 bg-green-950/30 border border-green-800 rounded-xl">
+                        <p className={`text-[10px] font-semibold uppercase ${textMuted}`}>Producido</p>
+                        <p className="text-sm sm:text-base font-black text-green-400">\${prodVehiculo.toLocaleString()}</p>
+                      </div>
+                      <div className="p-3 bg-red-950/30 border border-red-800 rounded-xl">
+                        <p className={`text-[10px] font-semibold uppercase ${textMuted}`}>Gastos</p>
+                        <p className="text-sm sm:text-base font-black text-red-400">\${gastVehiculo.toLocaleString()}</p>
+                      </div>
+                      <div className="p-3 bg-blue-950/30 border border-blue-800 rounded-xl">
+                        <p className={`text-[10px] font-semibold uppercase ${textMuted}`}>Ganancia</p>
+                        <p className="text-sm sm:text-base font-black text-blue-400">\${netoVehiculo.toLocaleString()}</p>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
+
+              <button
+                onClick={() => setVehiculoDetalle(null)}
+                className="w-full bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
+              >
+                Cerrar
+              </button>
             </div>
-          )
-        })()}
+          </div>
+        )}
+
+        {/* MODAL DETALLE DE DÍA DEL CALENDARIO */}
+        {diaSeleccionadoModal && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className={`w-full max-w-lg p-6 rounded-2xl shadow-2xl border space-y-4 ${bgCard}`}>
+              <div className="flex justify-between items-center border-b pb-3">
+                <div>
+                  <h3 className="text-base font-black">📅 Tarifas del {diaSeleccionadoModal.fecha}</h3>
+                  <p className={`text-xs ${textMuted}`}>Total producido este día: <span className="text-green-400 font-extrabold">\${diaSeleccionadoModal.total.toLocaleString()}</span></p>
+                </div>
+                <button
+                  onClick={() => setDiaSeleccionadoModal(null)}
+                  className="text-gray-400 hover:text-gray-100 font-bold text-xl px-2"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {diaSeleccionadoModal.registros.length === 0 ? (
+                <div className="py-6 text-center space-y-2">
+                  <span className="text-3xl">📭</span>
+                  <p className={`text-sm ${textMuted}`}>No hay registros de tarifa para este día.</p>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {diaSeleccionadoModal.registros.map(r => (
+                    <div key={r.id} className="p-3 border rounded-xl bg-gray-800/40 border-gray-700 flex justify-between items-center text-xs">
+                      <div>
+                        <span className="font-extrabold text-sm">{r.vehiculos?.placa || 'Taxi'}</span>
+                        <p className={`text-xs ${textMuted}`}>{r.observaciones || 'Tarifa normal'}</p>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <span className="font-black text-sm text-green-400">+\${Number(r.monto).toLocaleString()}</span>
+                        <button
+                          onClick={() => abrirEdicionProducido(r)}
+                          className="bg-yellow-400 hover:bg-yellow-500 text-gray-950 p-1.5 rounded-lg font-bold text-xs"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => eliminarProducido(r.id, r.vehiculos?.placa)}
+                          className="bg-red-900/50 hover:bg-red-900 text-red-300 p-1.5 rounded-lg font-bold text-xs border border-red-700"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <button
+                onClick={() => setDiaSeleccionadoModal(null)}
+                className="w-full bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL EDITAR TARIFA */}
+        {editandoProducido && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border space-y-4 ${bgCard}`}>
+              <div className="flex justify-between items-center border-b pb-3">
+                <h3 className="text-base font-extrabold">✏️ Editar Registro de Tarifa</h3>
+                <button
+                  onClick={() => setEditandoProducido(null)}
+                  className="text-gray-400 hover:text-gray-100 font-bold text-lg"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={guardarEdicionProducido} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1">Vehículo</label>
+                  <select
+                    value={editProdVehiculoId}
+                    onChange={(e) => setEditProdVehiculoId(e.target.value)}
+                    className={selectClass}
+                  >
+                    {vehiculos.map((v) => (
+                      <option key={v.id} value={v.id}>Placa: {v.placa}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <label className={`flex items-center space-x-2 p-2.5 rounded-lg border cursor-pointer transition ${editProdEsPicoYPlaca ? 'bg-blue-900/40 border-blue-500 text-blue-300' : 'bg-gray-800 border-gray-700'}`}>
+                    <input
+                      type="checkbox"
+                      checked={editProdEsPicoYPlaca}
+                      onChange={(e) => {
+                        setEditProdEsPicoYPlaca(e.target.checked)
+                        if (e.target.checked) {
+                          setEditProdEsDomingoFestivo(false)
+                          setEditProdMonto('0')
+                        }
+                      }}
+                      className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
+                    />
+                    <span className="text-xs font-bold">Pico y Placa (\$0)</span>
+                  </label>
+
+                  <label className={`flex items-center space-x-2 p-2.5 rounded-lg border cursor-pointer transition ${editProdEsDomingoFestivo ? 'bg-amber-900/40 border-amber-500 text-amber-300' : 'bg-gray-800 border-gray-700'}`}>
+                    <input
+                      type="checkbox"
+                      checked={editProdEsDomingoFestivo}
+                      onChange={(e) => {
+                        setEditProdEsDomingoFestivo(e.target.checked)
+                        if (e.target.checked) setEditProdEsPicoYPlaca(false)
+                      }}
+                      className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+                    />
+                    <span className="text-xs font-bold">Domingo / Festivo</span>
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="number"
+                    value={editProdMonto}
+                    disabled={editProdEsPicoYPlaca}
+                    onChange={(e) => setEditProdMonto(e.target.value)}
+                    className={inputClass}
+                    required={!editProdEsPicoYPlaca}
+                  />
+                  <input
+                    type="date"
+                    value={editProdFecha}
+                    onChange={(e) => setEditProdFecha(e.target.value)}
+                    className={inputClass}
+                    required
+                  />
+                </div>
+
+                <input
+                  type="text"
+                  placeholder="Observaciones"
+                  value={editProdObs}
+                  onChange={(e) => setEditProdObs(e.target.value)}
+                  className={inputClass}
+                />
+
+                <div className="flex space-x-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditandoProducido(null)}
+                    className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    Guardar Cambios
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL EDITAR MANTENIMIENTO */}
+        {editandoGasto && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border space-y-4 ${bgCard}`}>
+              <div className="flex justify-between items-center border-b pb-3">
+                <h3 className="text-base font-extrabold">✏️ Editar Mantenimiento / Gasto</h3>
+                <button
+                  onClick={() => setEditandoGasto(null)}
+                  className="text-gray-400 hover:text-gray-100 font-bold text-lg"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={guardarEdicionMantenimiento} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1">Vehículo</label>
+                  <select
+                    value={editVehiculoId}
+                    onChange={(e) => setEditVehiculoId(e.target.value)}
+                    className={selectClass}
+                  >
+                    {vehiculos.map((v) => (
+                      <option key={v.id} value={v.id}>Placa: {v.placa}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold mb-1">Categoría</label>
+                  <select
+                    value={editCategoria}
+                    onChange={(e) => setEditCategoria(e.target.value)}
+                    className={selectClass}
+                  >
+                    <option value="Cambio de Aceite">Cambio de Aceite</option>
+                    <option value="Repuestos / Piezas">Repuestos / Piezas</option>
+                    <option value="Taller / Mano de Obra">Taller / Mano de Obra</option>
+                    <option value="Llantas / Frenos">Llantas / Frenos</option>
+                    <option value="Otros">Otros</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Costo (\$)</label>
+                    <input
+                      type="number"
+                      value={editMonto}
+                      onChange={(e) => setEditMonto(e.target.value)}
+                      className={inputClass}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Fecha</label>
+                    <input
+                      type="date"
+                      value={editFecha}
+                      onChange={(e) => setEditFecha(e.target.value)}
+                      className={inputClass}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold mb-1">Observaciones</label>
+                  <input
+                    type="text"
+                    value={editObs}
+                    onChange={(e) => setEditObs(e.target.value)}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div className="flex space-x-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditandoGasto(null)}
+                    className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    Guardar Cambios
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
         {/* 4. PESTAÑA: DOCUMENTOS */}
         {tab === 'documentos' && (
           <div className="space-y-6">
             <div className={`p-6 rounded-xl shadow border-t-4 border-blue-500 max-w-xl mx-auto ${bgCard}`}>
               <h2 className="text-lg font-bold mb-1">📄 Actualizar / Registrar Vencimiento Documentos</h2>
-              <p className={`text-xs mb-4 ${textMuted}`}>Si ya existe el documento para esta placa, se actualizará la fecha sin duplicarse.</p>
               
               <form onSubmit={registrarDocumento} className="space-y-3">
                 <select
@@ -1874,7 +1965,7 @@ export default function App() {
             <div className={`p-6 rounded-xl shadow ${bgCard}`}>
               <h2 className="text-lg font-bold mb-4">📄 Estado de Documentos Registrados</h2>
               {documentos.length === 0 ? (
-                <p className={`text-sm ${textMuted}`}>No hay documentos registrados aún.</p>
+                <p className={`text-sm ${textMuted}`}>No hay documentos registrados.</p>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {documentos.map((d) => {
@@ -1894,7 +1985,6 @@ export default function App() {
                           <button
                             onClick={() => eliminarDocumento(d.id)}
                             className="text-xs bg-red-900/50 hover:bg-red-900 text-red-300 p-1.5 rounded-lg transition border border-red-700"
-                            title="Eliminar registro"
                           >
                             🗑️
                           </button>
@@ -1908,38 +1998,46 @@ export default function App() {
           </div>
         )}
 
-        {/* 5. PESTAÑA: MI PERFIL */}
+        {/* 5. PESTAÑA: PERFIL */}
         {tab === 'perfil' && (
           <div className={`max-w-xl mx-auto p-6 rounded-xl shadow border-t-4 border-gray-900 space-y-6 ${bgCard}`}>
             <div className="text-center">
               <div className="w-20 h-20 mx-auto mb-3 rounded-full bg-gray-900 text-yellow-400 font-black text-2xl flex items-center justify-center overflow-hidden border-4 border-yellow-400 shadow">
-                {perfilAvatarUrl ? (
-                  <img src={perfilAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                {usuarioAvatar ? (
+                  <img src={usuarioAvatar} alt="Avatar" className="w-full h-full object-cover" />
                 ) : (
-                  <span>{(perfilNombre || 'U').charAt(0).toUpperCase()}</span>
+                  <span>{(usuarioNombre || 'U').charAt(0).toUpperCase()}</span>
                 )}
               </div>
-              <div className="flex justify-center items-center space-x-2">
-                <h2 className="text-xl font-bold">{usuarioNombre}</h2>
-                {esAdmin && (
-                  <span className="bg-yellow-400 text-gray-950 text-[10px] font-black px-2 py-0.5 rounded-full uppercase">
-                    Admin Principal
-                  </span>
-                )}
-              </div>
-              <p className={`text-xs ${textMuted}`}>{session.user?.email}</p>
+              <h2 className="text-xl font-bold">{usuarioNombre}</h2>
+              <p className="text-xs font-medium text-yellow-400 mt-1">{perfilCorreo || session?.user?.email}</p>
+              {esAdmin && (
+                <span className="inline-block mt-2 bg-yellow-400 text-gray-950 font-extrabold text-xs px-3 py-1 rounded-full uppercase shadow">
+                  👑 SuperAdmin Activo
+                </span>
+              )}
             </div>
 
-            <form onSubmit={actualizarPerfil} className={`space-y-4 pt-2 border-t ${darkMode ? 'border-gray-800' : 'border-gray-100'}`}>
+            <form onSubmit={actualizarPerfil} className={`space-y-4 pt-4 border-t ${darkMode ? 'border-gray-800' : 'border-gray-100'}`}>
               <div>
                 <label className="block text-xs font-bold mb-1">Nombre Completo</label>
                 <input
                   type="text"
-                  placeholder="Tu Nombre"
                   value={perfilNombre}
                   onChange={(e) => setPerfilNombre(e.target.value)}
+                  placeholder="Tu Nombre"
                   className={inputClass}
                   required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold mb-1">Correo Electrónico Registrado</label>
+                <input
+                  type="email"
+                  value={perfilCorreo || session?.user?.email || ''}
+                  disabled
+                  className={inputClass + ' opacity-60 cursor-not-allowed bg-gray-800/30'}
                 />
               </div>
 
@@ -1947,31 +2045,17 @@ export default function App() {
                 <label className="block text-xs font-bold mb-1">URL Foto de Perfil (Opcional)</label>
                 <input
                   type="url"
-                  placeholder="https://ejemplo.com/mi-foto.jpg"
                   value={perfilAvatarUrl}
                   onChange={(e) => setPerfilAvatarUrl(e.target.value)}
+                  placeholder="https://..."
                   className={inputClass + ' text-xs'}
                 />
-                <p className={`text-[11px] mt-1 ${textMuted}`}>
-                  Puedes pegar el enlace de cualquier imagen pública de internet.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold mb-1">Correo Electrónico</label>
-                <input
-                  type="email"
-                  value={session.user?.email || ''}
-                  disabled
-                  className={`w-full p-2.5 border rounded-lg text-sm cursor-not-allowed ${darkMode ? 'bg-gray-800 border-gray-700 text-gray-400' : 'bg-gray-100 text-gray-500'}`}
-                />
-                <p className={`text-[11px] mt-1 ${textMuted}`}>El correo está vinculado a la autenticación de Supabase.</p>
               </div>
 
               <button
                 type="submit"
                 disabled={guardandoPerfil}
-                className="w-full bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-extrabold p-3 rounded-lg text-sm transition shadow-sm"
+                className="w-full bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-extrabold p-3 rounded-lg text-sm transition shadow"
               >
                 {guardandoPerfil ? 'Guardando...' : '💾 Guardar Cambios de Perfil'}
               </button>
