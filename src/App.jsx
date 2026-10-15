@@ -154,21 +154,23 @@ export default function App() {
   async function obtenerDatos() {
     if (!session?.user) return
 
-    // 1. Obtener vehículos propios (o todos si es SuperAdmin)
+    const miCorreo = (session.user.email || '').toLowerCase().trim()
+
+    // 1. Obtener vehículos que RLS permite ver en 'vehiculos'
     const { data: vData } = await supabase.from('vehiculos').select('*').order('id', { ascending: false })
     
-    // 2. Obtener vehículos compartidos con este usuario por su correo
+    // 2. Obtener vehiculos compartidos específicamente buscando por el correo del usuario
     const { data: vCompartidosData } = await supabase
       .from('vehiculos_compartidos')
       .select('vehiculo_id, vehiculos(*)')
-      .eq('correo_invitado', session.user.email.toLowerCase().trim())
+      .ilike('correo_invitado', miCorreo)
 
     const listaVehiculosCompartidos = (vCompartidosData || [])
       .map(item => item.vehiculos)
       .filter(Boolean)
       .map(v => ({ ...v, esCompartidoConmigo: true }))
 
-    // Consolidar lista eliminando duplicados
+    // Unificar vehículos en un mapa para no tener duplicados
     const mapaVehiculos = new Map()
 
     ;(vData || []).forEach(v => {
@@ -181,6 +183,11 @@ export default function App() {
     listaVehiculosCompartidos.forEach(v => {
       if (!mapaVehiculos.has(v.id)) {
         mapaVehiculos.set(v.id, v)
+      } else {
+        mapaVehiculos.set(v.id, {
+          ...mapaVehiculos.get(v.id),
+          esCompartidoConmigo: v.usuario_id !== session.user.id
+        })
       }
     })
 
@@ -351,7 +358,7 @@ export default function App() {
     if (error) {
       alert('No se pudo compartir. Verifica las políticas RLS en Supabase.\n\nError: ' + error.message)
     } else {
-      alert(`¡Taxi con placa ${vehiculoDetalle.placa} compartido con éxito a ${correoCompartir}!`)
+      alert(`¡Taxi con placa ${vehiculoDetalle.placa} compartido con éxito a ${correoCompartir.toLowerCase().trim()}!`)
       setCorreoCompartir('')
     }
   }
@@ -368,8 +375,9 @@ export default function App() {
 
   async function eliminarVehiculo(v) {
     const esPropietarioDirecto = v.usuario_id === session.user.id
+    const miCorreo = (session.user.email || '').toLowerCase().trim()
 
-    // CASO 1: Si es un usuario invitado (no es dueño directo ni admin)
+    // CASO 1: Si es un usuario invitado
     if (!esPropietarioDirecto && !esAdmin) {
       if (!confirm(`¿Deseas eliminar de tu perfil el taxi compartido (${v.placa})?\n\nNota: Esto solo quitará el vehículo de tu cuenta, no afectará al dueño original.`)) return
 
@@ -377,7 +385,7 @@ export default function App() {
         .from('vehiculos_compartidos')
         .delete()
         .eq('vehiculo_id', v.id)
-        .eq('correo_invitado', session.user.email.toLowerCase().trim())
+        .ilike('correo_invitado', miCorreo)
 
       if (error) {
         alert('Error al desvincular el taxi compartido: ' + error.message)
@@ -388,7 +396,7 @@ export default function App() {
       return
     }
 
-    // CASO 2: MODO SUPERADMIN (Ocultar vista propia)
+    // CASO 2: MODO SUPERADMIN
     if (esAdmin && !esPropietarioDirecto) {
       const resp = confirm(`👑 MODO ADMINISTRADOR:\n¿Deseas quitar el vehículo ${v.placa} únicamente de tu vista sin afectar los datos del dueño original?`)
       if (resp) {
@@ -401,7 +409,7 @@ export default function App() {
       return
     }
 
-    // CASO 3: EL PROPIETARIO REAL BORRA DEFINITIVAMENTE
+    // CASO 3: PROPIETARIO ELIMINA DEFINITIVAMENTE
     if (!confirm(`¿Estás seguro de eliminar permanentemente el taxi con placa ${v.placa}? Esta acción no se puede deshacer.`)) return
 
     const { error } = await supabase.from('vehiculos').delete().eq('id', v.id)
@@ -1218,14 +1226,14 @@ export default function App() {
                       <div className="text-right">
                         {totalDia > 0 ? (
                           <span className="text-[10px] sm:text-xs font-black text-green-400 block truncate">
-                            \${totalDia.toLocaleString()}
+                            ${totalDia.toLocaleString()}
                           </span>
                         ) : esDiaPicoYPlaca ? (
                           <span className="text-[9px] sm:text-[10px] font-black text-blue-400 block truncate">
                             🚘 Pico y Placa
                           </span>
                         ) : (
-                          <span className={`text-[10px] ${textMuted} block`}>\$0</span>
+                          <span className={`text-[10px] ${textMuted} block`}>$0</span>
                         )}
                       </div>
                     </div>
@@ -1239,10 +1247,10 @@ export default function App() {
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
                 <div>
                   <h2 className="text-lg font-bold">🛠️ Historial de Mantenimientos y Repuestos</h2>
-                  <p className={`text-xs mt-0.5 ${textMuted}`}>Total invertido este mes: <span className="font-black text-red-400">\${totalMantenimientosMes.toLocaleString()}</span></p>
+                  <p className={`text-xs mt-0.5 ${textMuted}`}>Total invertido este mes: <span className="font-black text-red-400">${totalMantenimientosMes.toLocaleString()}</span></p>
                 </div>
                 <span className="text-xs text-purple-300 font-bold bg-purple-900/50 px-3 py-1.5 rounded-full border border-purple-700 shadow-sm">
-                  Inversión Mes: \${totalMantenimientosMes.toLocaleString()}
+                  Inversión Mes: ${totalMantenimientosMes.toLocaleString()}
                 </span>
               </div>
 
@@ -1300,7 +1308,7 @@ export default function App() {
                         <div className="flex justify-between items-center border-b border-purple-700 pb-2 mb-3">
                           <span className="font-extrabold text-sm">📆 Fecha Mantenimiento: {fecha}</span>
                           <span className="bg-purple-900/50 text-purple-300 font-black text-xs sm:text-sm px-3 py-1 rounded-full border border-purple-700">
-                            Subtotal: \${totalGastoDia.toLocaleString()}
+                            Subtotal: ${totalGastoDia.toLocaleString()}
                           </span>
                         </div>
                         <div className="space-y-2">
@@ -1314,7 +1322,7 @@ export default function App() {
                               </div>
                               <span className={`italic text-xs ${textMuted}`}>{item.observaciones || 'Sin detalles'}</span>
                               <div className="flex items-center space-x-2">
-                                <span className="font-bold text-red-400">-\${Number(item.monto).toLocaleString()}</span>
+                                <span className="font-bold text-red-400">-${Number(item.monto).toLocaleString()}</span>
                                 <button
                                   onClick={() => abrirEdicionMantenimiento(item)}
                                   className="bg-yellow-400 hover:bg-yellow-500 text-gray-950 px-2 py-1 rounded text-xs font-bold transition shadow-sm"
@@ -1631,15 +1639,15 @@ export default function App() {
                     <div className="grid grid-cols-3 gap-2 text-center">
                       <div className="p-3 bg-green-950/30 border border-green-800 rounded-xl">
                         <p className={`text-[10px] font-semibold uppercase ${textMuted}`}>Producido</p>
-                        <p className="text-sm sm:text-base font-black text-green-400">\${prodVehiculo.toLocaleString()}</p>
+                        <p className="text-sm sm:text-base font-black text-green-400">${prodVehiculo.toLocaleString()}</p>
                       </div>
                       <div className="p-3 bg-red-950/30 border border-red-800 rounded-xl">
                         <p className={`text-[10px] font-semibold uppercase ${textMuted}`}>Gastos</p>
-                        <p className="text-sm sm:text-base font-black text-red-400">\${gastVehiculo.toLocaleString()}</p>
+                        <p className="text-sm sm:text-base font-black text-red-400">${gastVehiculo.toLocaleString()}</p>
                       </div>
                       <div className="p-3 bg-blue-950/30 border border-blue-800 rounded-xl">
                         <p className={`text-[10px] font-semibold uppercase ${textMuted}`}>Ganancia</p>
-                        <p className="text-sm sm:text-base font-black text-blue-400">\${netoVehiculo.toLocaleString()}</p>
+                        <p className="text-sm sm:text-base font-black text-blue-400">${netoVehiculo.toLocaleString()}</p>
                       </div>
                     </div>
                   </div>
@@ -1663,7 +1671,7 @@ export default function App() {
               <div className="flex justify-between items-center border-b pb-3">
                 <div>
                   <h3 className="text-base font-black">📅 Tarifas del {diaSeleccionadoModal.fecha}</h3>
-                  <p className={`text-xs ${textMuted}`}>Total producido este día: <span className="text-green-400 font-extrabold">\${diaSeleccionadoModal.total.toLocaleString()}</span></p>
+                  <p className={`text-xs ${textMuted}`}>Total producido este día: <span className="text-green-400 font-extrabold">${diaSeleccionadoModal.total.toLocaleString()}</span></p>
                 </div>
                 <button
                   onClick={() => setDiaSeleccionadoModal(null)}
@@ -1687,7 +1695,7 @@ export default function App() {
                         <p className={`text-xs ${textMuted}`}>{r.observaciones || 'Tarifa normal'}</p>
                       </div>
                       <div className="flex items-center space-x-2">
-                        <span className="font-black text-sm text-green-400">+\${Number(r.monto).toLocaleString()}</span>
+                        <span className="font-black text-sm text-green-400">+${Number(r.monto).toLocaleString()}</span>
                         <button
                           onClick={() => abrirEdicionProducido(r)}
                           className="bg-yellow-400 hover:bg-yellow-500 text-gray-950 p-1.5 rounded-lg font-bold text-xs"
@@ -1758,7 +1766,7 @@ export default function App() {
                       }}
                       className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
                     />
-                    <span className="text-xs font-bold">Pico y Placa (\$0)</span>
+                    <span className="text-xs font-bold">Pico y Placa ($0)</span>
                   </label>
 
                   <label className={`flex items-center space-x-2 p-2.5 rounded-lg border cursor-pointer transition ${editProdEsDomingoFestivo ? 'bg-amber-900/40 border-amber-500 text-amber-300' : 'bg-gray-800 border-gray-700'}`}>
@@ -1866,7 +1874,7 @@ export default function App() {
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-xs font-bold mb-1">Costo (\$)</label>
+                    <label className="block text-xs font-bold mb-1">Costo ($)</label>
                     <input
                       type="number"
                       value={editMonto}
