@@ -151,9 +151,11 @@ export default function App() {
   async function obtenerDatos() {
     const { data: vData } = await supabase.from('vehiculos').select('*').order('id', { ascending: false })
     
-    // Filtrar vehiculos ocultados por el Admin
+    // Filtrar vehículos ocultados por el Admin
     const vVisibles = (vData || []).filter(v => !vehiculosOcultosAdmin.includes(v.id))
     setVehiculos(vVisibles)
+
+    const idsVehiculosValidos = new Set((vData || []).map(v => v.id))
 
     if (vVisibles && vVisibles.length > 0) {
       setVehiculoSeleccionado(vVisibles[0].id)
@@ -168,37 +170,43 @@ export default function App() {
       .order('id', { ascending: false })
     setConductores(cData || [])
 
+    // Traer transacciones y filtrar solo las que tengan un vehículo existente válido
     const { data: tData } = await supabase
       .from('transacciones')
       .select('*, vehiculos(placa)')
       .order('fecha', { ascending: false })
-    setTransacciones(tData || [])
+    
+    const transaccionesValidas = (tData || []).filter(t => idsVehiculosValidos.has(t.vehiculo_id))
+    setTransacciones(transaccionesValidas)
 
+    // Traer documentos y filtrar solo los que tengan un vehículo existente válido
     const { data: dData } = await supabase
       .from('documentos')
       .select('*, vehiculos(placa)')
       .order('fecha_vencimiento', { ascending: true })
-    setDocumentos(dData || [])
+
+    const documentosValidos = (dData || []).filter(d => idsVehiculosValidos.has(d.vehiculo_id))
+    setDocumentos(documentosValidos)
 
     const hoyStr = new Date().toISOString().split('T')[0]
     const mesActualStr = hoyStr.substring(0, 7)
 
-    const totalProdHoy = (tData || [])
+    const totalProdHoy = transaccionesValidas
       .filter(t => t.fecha === hoyStr && t.tipo_movimiento === 'producido')
       .reduce((acc, curr) => acc + Number(curr.monto), 0)
     setProducidoHoy(totalProdHoy)
 
-    const totalGastHoy = (tData || [])
+    const totalGastHoy = transaccionesValidas
       .filter(t => t.fecha === hoyStr && t.tipo_movimiento === 'gasto')
       .reduce((acc, curr) => acc + Number(curr.monto), 0)
     setGastosHoy(totalGastHoy)
 
-    const totalProdMes = (tData || [])
+    const totalProdMes = transaccionesValidas
       .filter(t => t.fecha && t.fecha.startsWith(mesActualStr) && t.tipo_movimiento === 'producido')
       .reduce((acc, curr) => acc + Number(curr.monto), 0)
     setProducidoMes(totalProdMes)
 
-    const totalGastMes = (tData || [])
+    const totalGastMes = transaccionesValidas
       .filter(t => t.fecha && t.fecha.startsWith(mesActualStr) && t.tipo_movimiento === 'gasto')
       .reduce((acc, curr) => acc + Number(curr.monto), 0)
     setGastosMes(totalGastMes)
@@ -207,7 +215,7 @@ export default function App() {
     let alertas = 0
     const docsUrgentes = []
 
-    ;(dData || []).forEach(doc => {
+    documentosValidos.forEach(doc => {
       const fVenc = new Date(doc.fecha_vencimiento)
       const diffDias = Math.ceil((fVenc - hoy) / (1000 * 60 * 60 * 24))
       if (diffDias <= 15) {
