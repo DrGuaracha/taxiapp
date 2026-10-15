@@ -24,6 +24,19 @@ export default function App() {
   const [alertasCount, setAlertasCount] = useState(0)
   const [documentosProximosVencer, setDocumentosProximosVencer] = useState([])
 
+  // Estado para Modal Ver Detalle de Vehículo
+  const [vehiculoDetalle, setVehiculoDetalle] = useState(null)
+
+  // Estado Modal Edición de Vehículo
+  const [editandoVehiculo, setEditandoVehiculo] = useState(null)
+  const [editPlaca, setEditPlaca] = useState('')
+  const [editMarca, setEditMarca] = useState('')
+  const [editModelo, setEditModelo] = useState('')
+
+  // Estado Compartir Vehículo
+  const [correoCompartir, setCorreoCompartir] = useState('')
+  const [compartiendoState, setCompartiendoState] = useState(false)
+
   // Estados Perfil de Usuario
   const [perfilNombre, setPerfilNombre] = useState('')
   const [perfilAvatarUrl, setPerfilAvatarUrl] = useState('')
@@ -228,6 +241,63 @@ export default function App() {
       setMarca('')
       setModelo('')
       obtenerDatos()
+    }
+  }
+
+  function abrirEdicionVehiculo(v) {
+    setEditandoVehiculo(v)
+    setEditPlaca(v.placa)
+    setEditMarca(v.marca || '')
+    setEditModelo(v.modelo || '')
+  }
+
+  async function guardarEdicionVehiculo(e) {
+    e.preventDefault()
+    if (!editandoVehiculo) return
+
+    const { error } = await supabase
+      .from('vehiculos')
+      .update({
+        placa: editPlaca.toUpperCase(),
+        marca: editMarca,
+        modelo: editModelo
+      })
+      .eq('id', editandoVehiculo.id)
+
+    if (error) {
+      alert('Error al actualizar vehículo: ' + error.message)
+    } else {
+      alert('¡Características del vehículo actualizadas con éxito!')
+      setEditandoVehiculo(null)
+      if (vehiculoDetalle && vehiculoDetalle.id === editandoVehiculo.id) {
+        setVehiculoDetalle({ ...vehiculoDetalle, placa: editPlaca.toUpperCase(), marca: editMarca, modelo: editModelo })
+      }
+      obtenerDatos()
+    }
+  }
+
+  async function compartirVehiculo(e) {
+    e.preventDefault()
+    if (!correoCompartir.trim()) return alert('Ingresa el correo del usuario')
+    if (!vehiculoDetalle) return
+
+    setCompartiendoState(true)
+
+    const { error } = await supabase
+      .from('vehiculos_compartidos')
+      .insert([{
+        vehiculo_id: vehiculoDetalle.id,
+        correo_invitado: correoCompartir.toLowerCase().trim(),
+        propietario_id: session.user.id
+      }])
+
+    setCompartiendoState(false)
+
+    if (error) {
+      alert('No se pudo compartir. Verifica si la tabla `vehiculos_compartidos` existe en Supabase o el correo digitado.\n\nError: ' + error.message)
+    } else {
+      alert(`¡Taxi con placa ${vehiculoDetalle.placa} compartido con exito a ${correoCompartir}!`)
+      setCorreoCompartir('')
     }
   }
 
@@ -1261,384 +1331,6 @@ export default function App() {
           </div>
         )}
 
-        {/* MODAL DETALLE DE DÍA SELECCIONADO EN CALENDARIO */}
-        {diaSeleccionadoModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border space-y-4 ${bgCard}`}>
-              <div className="flex justify-between items-center border-b pb-3">
-                <div>
-                  <h3 className="text-base font-extrabold">📅 Detalle del Día</h3>
-                  <p className={`text-xs ${textMuted}`}>{diaSeleccionadoModal.fecha}</p>
-                </div>
-                <button
-                  onClick={() => setDiaSeleccionadoModal(null)}
-                  className="text-gray-400 hover:text-gray-100 font-bold text-lg"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="flex justify-between items-center bg-gray-800/30 p-3 rounded-xl border">
-                <span className="text-sm font-bold">Total Tarifas:</span>
-                <span className="text-base font-black text-green-400">${diaSeleccionadoModal.total.toLocaleString()}</span>
-              </div>
-
-              <div>
-                <h4 className="text-xs font-bold uppercase mb-2 text-gray-400">Taxis Registrados en esta fecha:</h4>
-                {diaSeleccionadoModal.registros.length === 0 ? (
-                  <p className={`text-sm italic py-4 text-center ${textMuted}`}>No hay registros en este día (Día en rojo / sin tarifa).</p>
-                ) : (
-                  <div className="space-y-2 max-h-60 overflow-y-auto">
-                    {diaSeleccionadoModal.registros.map(item => {
-                      const obsItem = (item.observaciones || '').toLowerCase()
-                      const esPicoPlacaItem = obsItem.includes('pico y placa')
-                      const esDomItem = obsItem.includes('domingo o festivo')
-                      const placaTaxi = item.vehiculos?.placa || 'N/A'
-                      return (
-                        <div key={item.id} className={rowClass}>
-                          <div>
-                            <span className="font-bold">Placa: {placaTaxi}</span>
-                            <p className={`text-xs ${textMuted}`}>{item.observaciones || 'Sin notas'}</p>
-                          </div>
-                          
-                          <div className="flex items-center space-x-2">
-                            {esPicoPlacaItem ? (
-                              <span className="font-bold text-xs bg-blue-900/60 text-blue-300 px-2.5 py-1 rounded-full border border-blue-700">
-                                🚘 Pico y Placa ($0)
-                              </span>
-                            ) : esDomItem ? (
-                              <span className="font-bold text-xs bg-amber-900/60 text-amber-300 px-2.5 py-1 rounded-full border border-amber-700">
-                                🎉 Festivo (+${Number(item.monto).toLocaleString()})
-                              </span>
-                            ) : (
-                              <span className="font-bold text-green-400">+${Number(item.monto).toLocaleString()}</span>
-                            )}
-
-                            <button
-                              onClick={() => abrirEdicionProducido(item)}
-                              className="bg-yellow-400 hover:bg-yellow-500 text-gray-950 px-2 py-1 rounded text-xs font-bold transition shadow-sm"
-                              title="Editar esta tarifa"
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              onClick={() => eliminarProducido(item.id, placaTaxi)}
-                              className="bg-red-900/50 hover:bg-red-900 text-red-300 px-2 py-1 rounded text-xs font-bold transition border border-red-700 shadow-sm"
-                              title="Eliminar esta tarifa"
-                            >
-                              🗑️
-                            </button>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-
-              <button
-                onClick={() => setDiaSeleccionadoModal(null)}
-                className="w-full bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
-              >
-                Cerrar
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* MODAL DE EDICIÓN DE TARIFA */}
-        {editandoProducido && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border ${bgCard}`}>
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-bold">✏️ Editar Tarifa</h3>
-                <button
-                  onClick={() => setEditandoProducido(null)}
-                  className="text-gray-400 hover:text-gray-100 font-bold text-lg"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <form onSubmit={guardarEdicionProducido} className="space-y-3">
-                <div>
-                  <label className="block text-xs font-bold mb-1">Vehículo / Placa</label>
-                  <select
-                    value={editProdVehiculoId}
-                    onChange={(e) => setEditProdVehiculoId(e.target.value)}
-                    className={selectClass}
-                  >
-                    {vehiculos.map((v) => (
-                      <option key={v.id} value={v.id} className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Placa: {v.placa}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <label className={`flex items-center space-x-2 p-2.5 rounded-lg border cursor-pointer transition ${editProdEsPicoYPlaca ? 'bg-blue-900/40 border-blue-500 text-blue-300' : (darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200')}`}>
-                    <input
-                      type="checkbox"
-                      checked={editProdEsPicoYPlaca}
-                      onChange={(e) => {
-                        setEditProdEsPicoYPlaca(e.target.checked)
-                        if (e.target.checked) {
-                          setEditProdEsDomingoFestivo(false)
-                          setEditProdMonto('0')
-                        }
-                      }}
-                      className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
-                    />
-                    <span className="text-xs font-bold">🚘 Pico y Placa ($0)</span>
-                  </label>
-
-                  <label className={`flex items-center space-x-2 p-2.5 rounded-lg border cursor-pointer transition ${editProdEsDomingoFestivo ? 'bg-amber-900/40 border-amber-500 text-amber-300' : (darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200')}`}>
-                    <input
-                      type="checkbox"
-                      checked={editProdEsDomingoFestivo}
-                      onChange={(e) => {
-                        setEditProdEsDomingoFestivo(e.target.checked)
-                        if (e.target.checked) setEditProdEsPicoYPlaca(false)
-                      }}
-                      className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
-                    />
-                    <span className="text-xs font-bold">🎉 Domingo / Festivo</span>
-                  </label>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Monto ($)</label>
-                    <input
-                      type="number"
-                      value={editProdMonto}
-                      disabled={editProdEsPicoYPlaca}
-                      onChange={(e) => setEditProdMonto(e.target.value)}
-                      className={`${inputClass} ${editProdEsPicoYPlaca ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      required={!editProdEsPicoYPlaca}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Fecha</label>
-                    <input
-                      type="date"
-                      value={editProdFecha}
-                      onChange={(e) => setEditProdFecha(e.target.value)}
-                      className={inputClass}
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Observaciones / Notas</label>
-                  <input
-                    type="text"
-                    value={editProdObs}
-                    onChange={(e) => setEditProdObs(e.target.value)}
-                    className={inputClass}
-                  />
-                </div>
-
-                <div className="flex space-x-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setEditandoProducido(null)}
-                    className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold p-2.5 rounded-lg text-sm transition"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
-                  >
-                    Guardar Cambios
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {/* MODAL DE EDICIÓN DE CONDUCTOR */}
-        {editandoConductor && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border space-y-4 ${bgCard}`}>
-              <div className="flex justify-between items-center border-b pb-3">
-                <h3 className="text-base font-extrabold">✏️ Editar Conductor</h3>
-                <button
-                  onClick={() => setEditandoConductor(null)}
-                  className="text-gray-400 hover:text-gray-100 font-bold text-lg"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <form onSubmit={guardarEdicionConductor} className="space-y-3">
-                <div>
-                  <label className="block text-xs font-bold mb-1">Nombre Completo</label>
-                  <input
-                    type="text"
-                    value={editCondNombre}
-                    onChange={(e) => setEditCondNombre(e.target.value)}
-                    className={inputClass}
-                    required
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Teléfono</label>
-                    <input
-                      type="text"
-                      value={editCondTelefono}
-                      onChange={(e) => setEditCondTelefono(e.target.value)}
-                      className={inputClass}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Turno</label>
-                    <select
-                      value={editCondTurno}
-                      onChange={(e) => setEditCondTurno(e.target.value)}
-                      className={selectClass}
-                    >
-                      <option value="Día" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Día</option>
-                      <option value="Noche" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Noche</option>
-                      <option value="24 Horas" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>24 Horas</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Asignar a Taxi</label>
-                  <select
-                    value={editCondVehiculoId}
-                    onChange={(e) => setEditCondVehiculoId(e.target.value)}
-                    className={selectClass}
-                  >
-                    <option value="" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Sin taxi asignado</option>
-                    {vehiculos.map((v) => (
-                      <option key={v.id} value={v.id} className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Placa: {v.placa}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex space-x-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setEditandoConductor(null)}
-                    className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold p-2.5 rounded-lg text-sm transition"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
-                  >
-                    Guardar Cambios
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {/* MODAL DE EDICIÓN DE MANTENIMIENTO */}
-        {editandoGasto && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border ${bgCard}`}>
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-bold">✏️ Editar Mantenimiento</h3>
-                <button
-                  onClick={() => setEditandoGasto(null)}
-                  className="text-gray-400 hover:text-gray-100 font-bold text-lg"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <form onSubmit={guardarEdicionMantenimiento} className="space-y-3">
-                <div>
-                  <label className="block text-xs font-bold mb-1">Vehículo / Placa</label>
-                  <select
-                    value={editVehiculoId}
-                    onChange={(e) => setEditVehiculoId(e.target.value)}
-                    className={selectClass}
-                  >
-                    {vehiculos.map((v) => (
-                      <option key={v.id} value={v.id} className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Placa: {v.placa}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Categoría</label>
-                  <select
-                    value={editCategoria}
-                    onChange={(e) => setEditCategoria(e.target.value)}
-                    className={selectClass}
-                  >
-                    <option value="Cambio de Aceite" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Cambio de Aceite</option>
-                    <option value="Repuestos / Piezas" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Repuestos / Piezas</option>
-                    <option value="Taller / Mano de Obra" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Taller / Mano de Obra</option>
-                    <option value="Llantas / Frenos" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Llantas / Frenos</option>
-                    <option value="Otros" className={darkMode ? 'bg-gray-900 text-gray-100' : ''}>Otros</option>
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Monto ($)</label>
-                    <input
-                      type="number"
-                      value={editMonto}
-                      onChange={(e) => setEditMonto(e.target.value)}
-                      className={inputClass}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold mb-1">Fecha</label>
-                    <input
-                      type="date"
-                      value={editFecha}
-                      onChange={(e) => setEditFecha(e.target.value)}
-                      className={inputClass}
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold mb-1">Observaciones / Detalles</label>
-                  <input
-                    type="text"
-                    value={editObs}
-                    onChange={(e) => setEditObs(e.target.value)}
-                    className={inputClass}
-                  />
-                </div>
-
-                <div className="flex space-x-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setEditandoGasto(null)}
-                    className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold p-2.5 rounded-lg text-sm transition"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
-                  >
-                    Guardar Cambios
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
         {/* 3. PESTAÑA: FLOTA Y PERSONAL */}
         {tab === 'flota' && (
           <div className="space-y-6">
@@ -1740,15 +1432,16 @@ export default function App() {
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {vehiculos.map((v) => (
-                    <div key={v.id} className={`p-4 border rounded-xl flex justify-between items-center ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50'}`}>
-                      <div>
+                    <div key={v.id} className={`p-4 border rounded-xl flex justify-between items-center transition hover:border-yellow-400 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50'}`}>
+                      <div className="cursor-pointer" onClick={() => setVehiculoDetalle(v)}>
                         <span className="bg-yellow-400 text-gray-950 font-extrabold px-3 py-1 rounded text-sm tracking-wider">
                           {v.placa}
                         </span>
                         <p className={`text-xs mt-2 ${textMuted}`}>{v.marca ? `${v.marca} ${v.modelo || ''}` : 'Taxi sin detalles'}</p>
+                        <p className="text-[11px] text-yellow-400 font-bold mt-1">📊 Toca para ver reporte financiero ➔</p>
                       </div>
 
-                      <div className="flex items-center space-x-2">
+                      <div className="flex items-center space-x-1.5">
                         <select
                           value={v.estado || 'Activo'}
                           onChange={(e) => cambiarEstadoVehiculo(v.id, e.target.value)}
@@ -1758,6 +1451,22 @@ export default function App() {
                           <option value="En Taller">🟡 En Taller</option>
                           <option value="Inactivo">🔴 Inactivo</option>
                         </select>
+
+                        <button
+                          onClick={() => abrirEdicionVehiculo(v)}
+                          className="bg-yellow-400 hover:bg-yellow-500 text-gray-950 p-1.5 rounded-lg text-xs font-bold transition shadow-sm"
+                          title="Editar vehículo"
+                        >
+                          ✏️
+                        </button>
+
+                        <button
+                          onClick={() => setVehiculoDetalle(v)}
+                          className="bg-blue-600 hover:bg-blue-700 text-white p-1.5 rounded-lg text-xs font-bold transition shadow-sm"
+                          title="Ver detalle / Compartir"
+                        >
+                          👁️
+                        </button>
 
                         <button
                           onClick={() => eliminarVehiculo(v.id, v.placa)}
@@ -1814,6 +1523,230 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* MODAL EDITAR CARACTERÍSTICAS DEL VEHÍCULO */}
+        {editandoVehiculo && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border space-y-4 ${bgCard}`}>
+              <div className="flex justify-between items-center border-b pb-3">
+                <h3 className="text-base font-extrabold">✏️ Editar Características del Vehículo</h3>
+                <button
+                  onClick={() => setEditandoVehiculo(null)}
+                  className="text-gray-400 hover:text-gray-100 font-bold text-lg"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={guardarEdicionVehiculo} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold mb-1">Placa</label>
+                  <input
+                    type="text"
+                    value={editPlaca}
+                    onChange={(e) => setEditPlaca(e.target.value)}
+                    className={inputClass + ' uppercase'}
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Marca</label>
+                    <input
+                      type="text"
+                      value={editMarca}
+                      onChange={(e) => setEditMarca(e.target.value)}
+                      className={inputClass}
+                      placeholder="Ej: Kia"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold mb-1">Modelo</label>
+                    <input
+                      type="text"
+                      value={editModelo}
+                      onChange={(e) => setEditModelo(e.target.value)}
+                      className={inputClass}
+                      placeholder="Ej: 2018"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex space-x-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditandoVehiculo(null)}
+                    className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    Guardar Cambios
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL VER DETALLE DE VEHÍCULO / REPORTE FINANCIERO Y COMPARTIR */}
+        {vehiculoDetalle && (() => {
+          const transVehiculo = transacciones.filter(t => t.vehiculo_id === vehiculoDetalle.id)
+          const tarifasVehiculo = transVehiculo.filter(t => t.tipo_movimiento === 'producido')
+          const gastosVehiculo = transacciones.filter(t => t.vehiculo_id === vehiculoDetalle.id && t.tipo_movimiento === 'gasto')
+
+          const hoyStr = new Date().toISOString().split('T')[0]
+          const mesActualStr = hoyStr.substring(0, 7)
+
+          const totalTarifasGlobal = tarifasVehiculo.reduce((acc, curr) => acc + Number(curr.monto), 0)
+          const totalTarifasMes = tarifasVehiculo.filter(t => t.fecha && t.fecha.startsWith(mesActualStr)).reduce((acc, curr) => acc + Number(curr.monto), 0)
+          
+          const totalGastosGlobal = gastosVehiculo.reduce((acc, curr) => acc + Number(curr.monto), 0)
+          const totalGastosMes = gastosVehiculo.filter(t => t.fecha && t.fecha.startsWith(mesActualStr)).reduce((acc, curr) => acc + Number(curr.monto), 0)
+
+          const gananciaNetaGlobal = totalTarifasGlobal - totalGastosGlobal
+          const gananciaNetaMes = totalTarifasMes - totalGastosMes
+
+          const conductorAsignado = conductores.find(c => c.vehiculo_id === vehiculoDetalle.id)
+
+          return (
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 z-50 overflow-y-auto">
+              <div className={`w-full max-w-2xl p-5 sm:p-6 rounded-2xl shadow-2xl border space-y-5 my-8 ${bgCard}`}>
+                <div className="flex justify-between items-center border-b pb-3">
+                  <div className="flex items-center space-x-3">
+                    <span className="bg-yellow-400 text-gray-950 font-black text-xl px-3 py-1 rounded-lg">
+                      {vehiculoDetalle.placa}
+                    </span>
+                    <div>
+                      <h3 className="text-base font-extrabold">{vehiculoDetalle.marca ? `${vehiculoDetalle.marca} ${vehiculoDetalle.modelo || ''}` : 'Taxi'}</h3>
+                      <p className={`text-xs ${textMuted}`}>Conductor: {conductorAsignado ? `${conductorAsignado.nombre} (${conductorAsignado.turno})` : 'Sin asignar'}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => abrirEdicionVehiculo(vehiculoDetalle)}
+                      className="bg-yellow-400 hover:bg-yellow-500 text-gray-950 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm flex items-center space-x-1"
+                    >
+                      <span>✏️ Editar Taxi</span>
+                    </button>
+                    <button
+                      onClick={() => setVehiculoDetalle(null)}
+                      className="text-gray-400 hover:text-gray-100 font-bold text-xl px-2"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                {/* Opción para Compartir este Vehículo */}
+                <div className={`p-4 rounded-xl border ${darkMode ? 'bg-gray-800/80 border-gray-700' : 'bg-blue-50/60 border-blue-200'}`}>
+                  <h4 className="text-xs font-bold uppercase mb-2 text-blue-400 flex items-center space-x-1">
+                    <span>👥 Compartir este vehículo con otro usuario</span>
+                  </h4>
+                  <form onSubmit={compartirVehiculo} className="flex gap-2">
+                    <input
+                      type="email"
+                      placeholder="Correo del usuario (ej: familiar@gmail.com)"
+                      value={correoCompartir}
+                      onChange={(e) => setCorreoCompartir(e.target.value)}
+                      className={inputClass + ' text-xs'}
+                      required
+                    />
+                    <button
+                      type="submit"
+                      disabled={compartiendoState}
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-lg text-xs transition whitespace-nowrap"
+                    >
+                      {compartiendoState ? 'Enviando...' : 'Compartir'}
+                    </button>
+                  </form>
+                </div>
+
+                {/* Tarjetas resumen de este vehiculo */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <div className={`p-3 rounded-xl border ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-green-50 border-green-200'}`}>
+                    <p className={`text-[11px] font-bold uppercase ${textMuted}`}>Tarifas Acumuladas</p>
+                    <p className="text-base font-extrabold text-green-400">${totalTarifasGlobal.toLocaleString()}</p>
+                    <p className={`text-[10px] ${textMuted}`}>Mes: ${totalTarifasMes.toLocaleString()}</p>
+                  </div>
+
+                  <div className={`p-3 rounded-xl border ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-red-50 border-red-200'}`}>
+                    <p className={`text-[11px] font-bold uppercase ${textMuted}`}>Mantenimientos / Gastos</p>
+                    <p className="text-base font-extrabold text-red-400">-${totalGastosGlobal.toLocaleString()}</p>
+                    <p className={`text-[10px] ${textMuted}`}>Mes: -${totalGastosMes.toLocaleString()}</p>
+                  </div>
+
+                  <div className={`col-span-2 sm:col-span-1 p-3 rounded-xl border ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-blue-50 border-blue-200'}`}>
+                    <p className={`text-[11px] font-bold uppercase ${textMuted}`}>Ganancia Neta Taxi</p>
+                    <p className={`text-base font-black ${gananciaNetaGlobal >= 0 ? 'text-blue-400' : 'text-red-400'}`}>
+                      ${gananciaNetaGlobal.toLocaleString()}
+                    </p>
+                    <p className={`text-[10px] ${textMuted}`}>Mes: ${gananciaNetaMes.toLocaleString()}</p>
+                  </div>
+                </div>
+
+                {/* Seccion de historial de tarifas del carro */}
+                <div>
+                  <h4 className="text-xs font-bold uppercase mb-2 text-yellow-400 flex justify-between items-center">
+                    <span>💵 Historial de Tarifas ({tarifasVehiculo.length})</span>
+                  </h4>
+                  {tarifasVehiculo.length === 0 ? (
+                    <p className={`text-xs italic py-2 ${textMuted}`}>No hay tarifas registradas para este taxi.</p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                      {tarifasVehiculo.map(t => (
+                        <div key={t.id} className="p-2 border rounded-lg bg-gray-800/40 border-gray-700 flex justify-between items-center text-xs">
+                          <div>
+                            <span className="font-bold">{t.fecha}</span>
+                            <span className={`ml-2 ${textMuted}`}>{t.observaciones || 'Tarifa normal'}</span>
+                          </div>
+                          <span className="font-bold text-green-400">+${Number(t.monto).toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Seccion de historial de mantenimientos del carro */}
+                <div>
+                  <h4 className="text-xs font-bold uppercase mb-2 text-purple-400 flex justify-between items-center">
+                    <span>🛠️ Historial de Mantenimientos y Repuestos ({gastosVehiculo.length})</span>
+                  </h4>
+                  {gastosVehiculo.length === 0 ? (
+                    <p className={`text-xs italic py-2 ${textMuted}`}>No hay mantenimientos registrados para este taxi.</p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                      {gastosVehiculo.map(g => (
+                        <div key={g.id} className="p-2 border rounded-lg bg-gray-800/40 border-gray-700 flex justify-between items-center text-xs">
+                          <div>
+                            <span className="font-bold">{g.fecha}</span>
+                            <span className="ml-2 px-1.5 py-0.5 text-[10px] bg-purple-900/50 text-purple-300 font-bold rounded border border-purple-700">
+                              {g.categoria_gasto}
+                            </span>
+                            <p className={`text-[11px] ${textMuted}`}>{g.observaciones || 'Sin detalles'}</p>
+                          </div>
+                          <span className="font-bold text-red-400">-${Number(g.monto).toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={() => setVehiculoDetalle(null)}
+                  className="w-full bg-yellow-400 hover:bg-yellow-500 text-gray-950 font-bold p-2.5 rounded-lg text-sm transition"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          )
+        })()}
 
         {/* 4. PESTAÑA: DOCUMENTOS */}
         {tab === 'documentos' && (
