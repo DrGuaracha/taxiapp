@@ -2,6 +2,16 @@ import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
 import Auth from './Auth'
 
+// Función para obtener la fecha exacta en Colombia (YYYY-MM-DD)
+const obtenerFechaColombia = () => {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date())
+}
+
 export default function App() {
   const [session, setSession] = useState(null)
   const [tab, setTab] = useState('inicio') // 'inicio', 'finanzas', 'flota', 'documentos', 'perfil'
@@ -72,7 +82,7 @@ export default function App() {
   // Tarifa diaria con fecha personalizable, Pico y Placa, y Domingo o Festivo
   const [vehiculoSeleccionado, setVehiculoSeleccionado] = useState('')
   const [monto, setMonto] = useState('')
-  const [fechaProducido, setFechaProducido] = useState(new Date().toISOString().split('T')[0])
+  const [fechaProducido, setFechaProducido] = useState(obtenerFechaColombia())
   const [observaciones, setObservaciones] = useState('')
   const [esPicoYPlaca, setEsPicoYPlaca] = useState(false)
   const [esDomingoFestivo, setEsDomingoFestivo] = useState(false)
@@ -86,12 +96,18 @@ export default function App() {
   const [editProdEsPicoYPlaca, setEditProdEsPicoYPlaca] = useState(false)
   const [editProdEsDomingoFestivo, setEditProdEsDomingoFestivo] = useState(false)
 
-  // Gasto / Mantenimiento con fecha personalizable
+  // Gasto / Mantenimiento con fecha personalizable y factura
   const [vehiculoGastoSeleccionado, setVehiculoGastoSeleccionado] = useState('')
   const [montoGasto, setMontoGasto] = useState('')
-  const [fechaGasto, setFechaGasto] = useState(new Date().toISOString().split('T')[0])
+  const [fechaGasto, setFechaGasto] = useState(obtenerFechaColombia())
   const [categoriaGasto, setCategoriaGasto] = useState('Cambio de Aceite')
   const [obsGasto, setObsGasto] = useState('')
+  const [archivoFactura, setArchivoFactura] = useState(null)
+
+  // Estados para Modal de Agregar/Cambiar Factura en registros existentes
+  const [modalFacturaItem, setModalFacturaItem] = useState(null)
+  const [nuevoArchivoFactura, setNuevoArchivoFactura] = useState(null)
+  const [subiendoFacturaModal, setSubiendoFacturaModal] = useState(false)
 
   // Estado Modal Edición de Mantenimiento / Gasto
   const [editandoGasto, setEditandoGasto] = useState(null)
@@ -227,7 +243,7 @@ export default function App() {
     const documentosValidos = (dData || []).filter(d => idsVehiculosValidos.has(d.vehiculo_id))
     setDocumentos(documentosValidos)
 
-    const hoyStr = new Date().toISOString().split('T')[0]
+    const hoyStr = obtenerFechaColombia()
     const mesActualStr = hoyStr.substring(0, 7)
 
     const totalProdHoy = transaccionesValidas
@@ -569,20 +585,117 @@ export default function App() {
     e.preventDefault()
     if (!vehiculoGastoSeleccionado || !montoGasto) return alert('Selecciona un taxi y el monto')
 
+    let urlFacturaFinal = ''
+
+    // Subir factura a Supabase Storage si seleccionó un archivo
+    if (archivoFactura) {
+      const nombreArchivo = `${Date.now()}_${archivoFactura.name.replace(/\s+/g, '_')}`
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('facturas-mantenimiento')
+        .upload(nombreArchivo, archivoFactura)
+
+      if (uploadError) {
+        alert('Error al subir la factura: ' + uploadError.message)
+        return
+      }
+
+      const { data: publicURLData } = supabase.storage
+        .from('facturas-mantenimiento')
+        .getPublicUrl(nombreArchivo)
+
+      urlFacturaFinal = publicURLData.publicUrl
+    }
+
     const { error } = await supabase.from('transacciones').insert([{
       vehiculo_id: vehiculoGastoSeleccionado,
       tipo_movimiento: 'gasto',
       categoria_gasto: categoriaGasto,
       monto: Number(montoGasto),
       fecha: fechaGasto,
-      observaciones: obsGasto
+      observaciones: obsGasto,
+      url_factura: urlFacturaFinal
     }])
 
     if (error) alert('Error guardando gasto: ' + error.message)
     else {
       setMontoGasto('')
       setObsGasto('')
+      setArchivoFactura(null)
       obtenerDatos()
+      alert('¡Mantenimiento y factura guardados con éxito!')
+    }
+  }
+
+  async function guardarFacturaModal(e) {
+    e.preventDefault()
+    if (!modalFacturaItem || !nuevoArchivoFactura) return alert('Selecciona una imagen')
+
+    setSubiendoFacturaModal(true)
+
+    try {
+      const nombreArchivo = `${Date.now()}_${nuevoArchivoFactura.name.replace(/\s+/g, '_')}`
+      const { error: uploadError } = await supabase.storage
+        .from('facturas-mantenimiento')
+        .upload(nombreArchivo, nuevoArchivoFactura)
+
+      if (uploadError) {
+        alert('Error al subir la factura: ' + uploadError.message)
+        setSubiendoFacturaModal(false)
+        return
+      }
+
+      const { data: publicURLData } = supabase.storage
+        .from('facturas-mantenimiento')
+        .getPublicUrl(nombreArchivo)
+
+      const urlFacturaFinal = publicURLData.publicUrl
+
+      const { error } = await supabase
+        .from('transacciones')
+        .update({ url_factura: urlFacturaFinal })
+        .eq('id', modalFacturaItem.id)
+
+      setSubiendoFacturaModal(false)
+
+      if (error) {
+        alert('Error al actualizar la transacción: ' + error.message)
+      } else {
+        alert('¡Factura agregada con éxito!')
+        setModalFacturaItem(null)
+        setNuevoArchivoFactura(null)
+        obtenerDatos()
+      }
+    } catch (err) {
+      setSubiendoFacturaModal(false)
+      alert('Ocurrió un error: ' + err.message)
+    }
+  }
+
+  async function eliminarFotoFactura(id, urlFactura) {
+    if (!confirm('¿Deseas eliminar la foto de esta factura?')) return
+
+    try {
+      if (urlFactura) {
+        const partesUrl = urlFactura.split('/facturas-mantenimiento/')
+        if (partesUrl.length > 1) {
+          const nombreArchivo = partesUrl[1]
+          await supabase.storage.from('facturas-mantenimiento').remove([nombreArchivo])
+        }
+      }
+
+      const { error } = await supabase
+        .from('transacciones')
+        .update({ url_factura: null })
+        .eq('id', id)
+
+      if (error) {
+        alert('Error al desvincular la foto: ' + error.message)
+      } else {
+        alert('Foto de la factura eliminada correctamente')
+        obtenerDatos()
+      }
+    } catch (err) {
+      alert('Ocurrió un error al eliminar la foto: ' + err.message)
     }
   }
 
@@ -747,7 +860,7 @@ export default function App() {
     return true
   })
 
-  const hoyStr = new Date().toISOString().split('T')[0]
+  const hoyStr = obtenerFechaColombia()
   const mesActualStr = hoyStr.substring(0, 7)
   const totalMantenimientosMes = transacciones
     .filter(t => t.tipo_movimiento === 'gasto' && t.fecha && t.fecha.startsWith(mesActualStr))
@@ -1119,6 +1232,17 @@ export default function App() {
                     className={inputClass}
                   />
 
+                  {/* SUBIDA DE FOTO DE LA FACTURA */}
+                  <div className="space-y-1">
+                    <label className="block text-xs font-bold text-gray-400">📸 Factura o Recibo (Opcional)</label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => setArchivoFactura(e.target.files[0])}
+                      className={`w-full p-2 border rounded-lg text-xs outline-none ${darkMode ? 'bg-gray-800 border-gray-700 text-gray-300' : 'bg-white border-gray-300'}`}
+                    />
+                  </div>
+
                   <button
                     type="submit"
                     className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold p-2.5 rounded-lg text-sm transition"
@@ -1196,7 +1320,7 @@ export default function App() {
                   
                   const esDiaPicoYPlaca = registrosDia.some(r => (r.observaciones || '').toLowerCase().includes('pico y placa'))
 
-                  const hoyFechaStr = new Date().toISOString().split('T')[0]
+                  const hoyFechaStr = obtenerFechaColombia()
                   const esDiaPasadoOActual = fechaStr <= hoyFechaStr
 
                   let puntoColor = 'bg-gray-600'
@@ -1242,7 +1366,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* HISTORIAL DE MANTENIMIENTOS */}
+            {/* HISTORIAL DE MANTENIMIENTOS Y REPUESTOS (CON FACTURA) */}
             <div className={`p-6 rounded-xl shadow border-t-4 border-purple-500 ${bgCard}`}>
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
                 <div>
@@ -1314,13 +1438,48 @@ export default function App() {
                         <div className="space-y-2">
                           {lista.map((item) => (
                             <div key={item.id} className={rowClass}>
-                              <div>
-                                <span className="font-bold">Placa: {item.vehiculos?.placa || 'N/A'}</span>
-                                <span className="ml-2 px-2 py-0.5 text-xs bg-purple-900/50 text-purple-300 font-bold rounded-md border border-purple-700">
-                                  {item.categoria_gasto}
-                                </span>
+                              <div className="space-y-1">
+                                <div className="flex items-center space-x-2">
+                                  <span className="font-bold">Placa: {item.vehiculos?.placa || 'N/A'}</span>
+                                  <span className="px-2 py-0.5 text-xs bg-purple-900/50 text-purple-300 font-bold rounded-md border border-purple-700">
+                                    {item.categoria_gasto}
+                                  </span>
+                                </div>
+                                <p className={`italic text-xs ${textMuted}`}>{item.observaciones || 'Sin detalles'}</p>
+
+                                {/* VISUALIZAR / AGREGAR / ELIMINAR FOTO DE LA FACTURA */}
+                                <div className="flex items-center space-x-2 pt-1">
+                                  {item.url_factura ? (
+                                    <>
+                                      <a
+                                        href={item.url_factura}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-xs bg-blue-900/65 hover:bg-blue-800 text-blue-200 px-2.5 py-1 rounded-md font-bold transition flex items-center space-x-1 border border-blue-700 shadow-sm"
+                                      >
+                                        <span>🖼️ Ver Factura</span>
+                                      </a>
+                                      <button
+                                        type="button"
+                                        onClick={() => eliminarFotoFactura(item.id, item.url_factura)}
+                                        className="text-[11px] text-red-300 hover:text-red-100 underline font-semibold transition"
+                                        title="Borrar foto de factura"
+                                      >
+                                        🗑️ Quitar foto
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setModalFacturaItem(item)}
+                                      className="text-xs bg-purple-900/60 hover:bg-purple-800 text-purple-200 px-2.5 py-1 rounded-md font-bold transition flex items-center space-x-1 border border-purple-700 shadow-sm"
+                                    >
+                                      <span>📸 Agregar Factura</span>
+                                    </button>
+                                  )}
+                                </div>
                               </div>
-                              <span className={`italic text-xs ${textMuted}`}>{item.observaciones || 'Sin detalles'}</span>
+
                               <div className="flex items-center space-x-2">
                                 <span className="font-bold text-red-400">-${Number(item.monto).toLocaleString()}</span>
                                 <button
@@ -1918,6 +2077,60 @@ export default function App() {
                     className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-bold p-2.5 rounded-lg text-sm transition"
                   >
                     Guardar Cambios
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL AGREGAR / SUBIR FACTURA A GASTO EXISTENTE */}
+        {modalFacturaItem && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className={`w-full max-w-md p-6 rounded-2xl shadow-2xl border space-y-4 ${bgCard}`}>
+              <div className="flex justify-between items-center border-b pb-3">
+                <h3 className="text-base font-extrabold">📸 Agregar Factura al Mantenimiento</h3>
+                <button
+                  onClick={() => {
+                    setModalFacturaItem(null)
+                    setNuevoArchivoFactura(null)
+                  }}
+                  className="text-gray-400 hover:text-gray-100 font-bold text-lg"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <p className={`text-xs ${textMuted}`}>
+                Selecciona la imagen de la factura para asociarla a este gasto de <span className="font-bold text-purple-400">{modalFacturaItem.categoria_gasto}</span> (${Number(modalFacturaItem.monto).toLocaleString()}).
+              </p>
+
+              <form onSubmit={guardarFacturaModal} className="space-y-3">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setNuevoArchivoFactura(e.target.files[0])}
+                  className={`w-full p-2.5 border rounded-lg text-xs outline-none ${darkMode ? 'bg-gray-800 border-gray-700 text-gray-300' : 'bg-white border-gray-300'}`}
+                  required
+                />
+
+                <div className="flex space-x-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalFacturaItem(null)
+                      setNuevoArchivoFactura(null)
+                    }}
+                    className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={subiendoFacturaModal}
+                    className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-bold p-2.5 rounded-lg text-sm transition"
+                  >
+                    {subiendoFacturaModal ? 'Subiendo...' : 'Subir y Guardar'}
                   </button>
                 </div>
               </form>
