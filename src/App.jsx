@@ -24,6 +24,9 @@ export default function App() {
     return localStorage.getItem('darkMode') === 'true'
   })
 
+  // Estado para activar o desactivar la vista de SuperAdmin
+  const [modoSuperAdminActivo, setModoSuperAdminActivo] = useState(false)
+
   const [vehiculos, setVehiculos] = useState([])
   const [transacciones, setTransacciones] = useState([])
   const [documentos, setDocumentos] = useState([])
@@ -157,7 +160,7 @@ export default function App() {
     if (session) {
       obtenerDatos()
     }
-  }, [session])
+  }, [session, modoSuperAdminActivo])
 
   function toggleDarkMode() {
     const nuevoModo = !darkMode
@@ -208,7 +211,11 @@ export default function App() {
     })
 
     const todosLosVehiculos = Array.from(mapaVehiculos.values())
-    const vVisibles = todosLosVehiculos.filter(v => !vehiculosOcultosAdmin.includes(v.id))
+    
+    // Filtro con el interruptor de SuperAdmin
+    const vVisibles = (esAdmin && modoSuperAdminActivo)
+      ? todosLosVehiculos.filter(v => !vehiculosOcultosAdmin.includes(v.id))
+      : todosLosVehiculos.filter(v => v.usuario_id === session.user.id && !vehiculosOcultosAdmin.includes(v.id))
     
     setVehiculos(vVisibles)
 
@@ -917,6 +924,21 @@ export default function App() {
         </div>
 
         <div className="flex items-center space-x-2">
+          {/* INTERRUPTOR DE MODO SUPERADMIN */}
+          {esAdmin && (
+            <button
+              onClick={() => setModoSuperAdminActivo(!modoSuperAdminActivo)}
+              className={`p-2.5 rounded-lg text-xs font-extrabold transition shadow ${
+                modoSuperAdminActivo 
+                  ? 'bg-gray-900 text-green-400 border border-green-500' 
+                  : 'bg-gray-900 text-yellow-400'
+              }`}
+              title="Alternar vista de todos los vehículos o solo los míos"
+            >
+              {modoSuperAdminActivo ? '👑 Admin: ON' : '👑 Admin: OFF'}
+            </button>
+          )}
+
           <button
             onClick={toggleDarkMode}
             className="bg-gray-900 text-yellow-400 hover:bg-gray-800 p-2.5 rounded-lg text-xs font-bold transition shadow"
