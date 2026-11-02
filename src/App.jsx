@@ -12,6 +12,37 @@ const obtenerFechaColombia = () => {
   }).format(new Date())
 }
 
+// Trae TODAS las filas (Supabase corta en 1000 por consulta)
+async function traerTodo(construirQuery) {
+  const TAM = 1000
+  let desde = 0
+  let todo = []
+  while (true) {
+    const { data, error } = await construirQuery().range(desde, desde + TAM - 1)
+    if (error) { console.error(error); break }
+    todo = todo.concat(data || [])
+    if (!data || data.length < TAM) break
+    desde += TAM
+  }
+  return todo
+}
+
+// Días hasta una fecha 'YYYY-MM-DD', usando el día de Colombia (sin desfase UTC)
+const diasHastaVencimiento = (fechaStr) => {
+  const [a, m, d] = String(fechaStr).slice(0, 10).split('-').map(Number)
+  const [ha, hm, hd] = obtenerFechaColombia().split('-').map(Number)
+  return Math.round((Date.UTC(a, m - 1, d) - Date.UTC(ha, hm - 1, hd)) / 86400000)
+}
+
+// Evita que textos con < > & rompan el reporte PDF
+const escapeHtml = (txt) =>
+  String(txt ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+
 export default function App() {
   const [session, setSession] = useState(null)
   const [tab, setTab] = useState('inicio') // 'inicio', 'finanzas', 'flota', 'documentos', 'perfil'
@@ -222,11 +253,13 @@ export default function App() {
 
     const idsVehiculosValidos = new Set(vVisibles.map(v => v.id))
 
-    if (vVisibles && vVisibles.length > 0) {
-      setVehiculoSeleccionado(vVisibles[0].id)
-      setVehiculoGastoSeleccionado(vVisibles[0].id)
-      setVehiculoDocSeleccionado(vVisibles[0].id)
-      setVehiculoConductorSel(vVisibles[0].id)
+    if (vVisibles.length > 0) {
+      const conservar = (actual) =>
+        vVisibles.some(v => String(v.id) === String(actual)) ? actual : vVisibles[0].id
+      setVehiculoSeleccionado(conservar)
+      setVehiculoGastoSeleccionado(conservar)
+      setVehiculoDocSeleccionado(conservar)
+      setVehiculoConductorSel(conservar)
     }
 
     const { data: cData } = await supabase
@@ -235,12 +268,15 @@ export default function App() {
       .order('id', { ascending: false })
     setConductores(cData || [])
 
-    const { data: tData } = await supabase
-      .from('transacciones')
-      .select('*, vehiculos(placa)')
-      .order('fecha', { ascending: false })
-    
-    const transaccionesValidas = (tData || []).filter(t => idsVehiculosValidos.has(t.vehiculo_id))
+    const tData = await traerTodo(() =>
+      supabase
+        .from('transacciones')
+        .select('*, vehiculos(placa)')
+        .order('fecha', { ascending: false })
+        .order('id', { ascending: false })
+    )
+
+    const transaccionesValidas = tData.filter(t => idsVehiculosValidos.has(t.vehiculo_id))
     setTransacciones(transaccionesValidas)
 
     const { data: dData } = await supabase
@@ -263,13 +299,11 @@ export default function App() {
       .reduce((acc, curr) => acc + Number(curr.monto), 0)
     setGastosHoy(totalGastHoy)
 
-    const hoy = new Date()
     let alertas = 0
     const docsUrgentes = []
 
     documentosValidos.forEach(doc => {
-      const fVenc = new Date(doc.fecha_vencimiento)
-      const diffDias = Math.ceil((fVenc - hoy) / (1000 * 60 * 60 * 24))
+      const diffDias = diasHastaVencimiento(doc.fecha_vencimiento)
       if (diffDias <= 15) {
         alertas++
       }
@@ -787,9 +821,7 @@ export default function App() {
   }
 
   function getEstadoDocumento(fechaStr) {
-    const hoy = new Date()
-    const fVenc = new Date(fechaStr)
-    const diffDias = Math.ceil((fVenc - hoy) / (1000 * 60 * 60 * 24))
+    const diffDias = diasHastaVencimiento(fechaStr)
 
     if (diffDias < 0) return { texto: 'Vencido', color: darkMode ? 'bg-red-900/50 text-red-300 border-red-700' : 'bg-red-100 text-red-800 border-red-300' }
     if (diffDias <= 15) return { texto: `Vence en ${diffDias} días`, color: darkMode ? 'bg-yellow-900/50 text-yellow-300 border-yellow-700' : 'bg-yellow-100 text-yellow-800 border-yellow-300' }
@@ -832,7 +864,7 @@ export default function App() {
   const gananciaNetaMesSel = totalProdMesSel - totalGastMesSel
 
   // Cálculo de la Ganancia Total del Año en curso (Año actual del sistema)
-  const añoEnCursoStr = new Date().getFullYear().toString()
+  const añoEnCursoStr = obtenerFechaColombia().slice(0, 4)
   const totalProdAnio = transacciones
     .filter(t => t.fecha && t.fecha.startsWith(añoEnCursoStr) && t.tipo_movimiento === 'producido')
     .reduce((acc, curr) => acc + Number(curr.monto), 0)
@@ -912,6 +944,10 @@ export default function App() {
     }
 
     const ventana = window.open('', '_blank')
+    if (!ventana) {
+      alert('Tu navegador bloqueó la ventana emergente. Permítela e intenta de nuevo.')
+      return
+    }
     ventana.document.write(`
       <html>
         <head>
@@ -938,7 +974,7 @@ export default function App() {
         <body>
           <div class="header">
             <h1>🚕 Reporte Financiero de Ganancias Netas</h1>
-            <p>Período: <strong>${mesTexto} ${añoTexto}</strong> | Vehículo: <strong>${subtituloVehiculo}</strong> | Usuario: ${usuarioNombre}</p>
+            <p>Período: <strong>${mesTexto} ${añoTexto}</strong> | Vehículo: <strong>${escapeHtml(subtituloVehiculo)}</strong> | Usuario: ${escapeHtml(usuarioNombre)}</p>
           </div>
 
           <div class="summary-box">
@@ -971,8 +1007,8 @@ export default function App() {
                 tarifasMes.map(t => `
                   <tr>
                     <td>${t.fecha}</td>
-                    <td>${t.vehiculos?.placa || 'N/A'}</td>
-                    <td>${t.observaciones || 'Tarifa normal'}</td>
+                    <td>${escapeHtml(t.vehiculos?.placa || 'N/A')}</td>
+                    <td>${escapeHtml(t.observaciones || 'Tarifa normal')}</td>
                     <td style="color:#16a34a; font-weight:bold;">+$${Number(t.monto).toLocaleString()}</td>
                   </tr>
                 `).join('')
@@ -996,9 +1032,9 @@ export default function App() {
                 gastosMesLista.map(g => `
                   <tr>
                     <td>${g.fecha}</td>
-                    <td>${g.vehiculos?.placa || 'N/A'}</td>
-                    <td>${g.categoria_gasto || 'Gasto'}</td>
-                    <td>${g.observaciones || '-'}</td>
+                    <td>${escapeHtml(g.vehiculos?.placa || 'N/A')}</td>
+                    <td>${escapeHtml(g.categoria_gasto || 'Gasto')}</td>
+                    <td>${escapeHtml(g.observaciones || '-')}</td>
                     <td style="color:#dc2626; font-weight:bold;">-$${Number(g.monto).toLocaleString()}</td>
                   </tr>
                 `).join('')
@@ -1024,52 +1060,75 @@ export default function App() {
   const usuarioNombre = perfilNombre || session.user?.user_metadata?.full_name || session.user?.email?.split('@')[0]
   const usuarioAvatar = perfilAvatarUrl || session.user?.user_metadata?.avatar_url || session.user?.user_metadata?.picture
 
-  const bgMain = darkMode ? 'bg-gray-950 text-gray-100' : 'bg-gray-100 text-gray-900'
+  const bgMain = darkMode ? 'bg-gray-950 text-gray-100' : 'bg-[#F4F3EE] text-gray-900'
   const bgCard = darkMode ? 'bg-gray-900 border-gray-800 text-gray-100' : 'bg-white border-gray-200 text-gray-900'
   const textMuted = darkMode ? 'text-gray-400' : 'text-gray-500'
   const inputClass = darkMode ? 'w-full p-2.5 border rounded-lg bg-gray-800 border-gray-700 text-gray-100 text-sm outline-none focus:ring-2 focus:ring-yellow-400' : 'w-full p-2.5 border rounded-lg bg-white text-sm outline-none focus:ring-2 focus:ring-yellow-400'
   const selectClass = darkMode ? 'w-full p-2.5 border rounded-lg bg-gray-800 border-gray-700 text-gray-100 text-sm outline-none focus:ring-2 focus:ring-yellow-400' : 'w-full p-2.5 border rounded-lg bg-white text-sm outline-none focus:ring-2 focus:ring-yellow-400'
   const rowClass = darkMode ? 'p-3 border rounded-lg bg-gray-800/60 border-gray-800 flex justify-between items-center text-sm' : 'p-3 border rounded-lg bg-gray-50 flex justify-between items-center text-sm'
 
+  const itemsMenu = [
+    { id: 'inicio', largo: 'Inicio', corto: 'Inicio', icono: <path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" /> },
+    { id: 'finanzas', largo: 'Movimientos', corto: 'Finanzas', icono: <><rect x="3" y="6" width="18" height="14" rx="2" /><path d="M3 10h18M16 15h2" /></> },
+    { id: 'flota', largo: 'Flota y conductores', corto: 'Flota', icono: <path d="M5 16l1.5-5a2 2 0 0 1 1.9-1.4h7.2A2 2 0 0 1 17.5 11L19 16M4 16h16v3H4zM7 19v1.5M17 19v1.5" /> },
+    { id: 'documentos', largo: 'Documentos', corto: 'Docs', icono: <path d="M7 3h7l4 4v14H7zM14 3v4h4" /> },
+    { id: 'perfil', largo: 'Mi perfil', corto: 'Perfil', icono: <><circle cx="12" cy="8" r="4" /><path d="M4 21c1-4 4-6 8-6s7 2 8 6" /></> },
+  ]
+
+  const titulosTab = {
+    inicio: { titulo: 'Resumen de hoy', sub: 'Tu flota de un vistazo' },
+    finanzas: { titulo: 'Movimientos', sub: 'Tarifas, mantenimientos y calendario' },
+    flota: { titulo: 'Flota y conductores', sub: 'Tus taxis y quienes los manejan' },
+    documentos: { titulo: 'Documentos y vencimientos', sub: 'SOAT, tecnomecánica y más' },
+    perfil: { titulo: 'Mi perfil', sub: 'Tus datos y preferencias' },
+  }
+
   return (
-    <div className={`min-h-screen p-3 sm:p-6 font-sans pb-20 transition-colors duration-200 ${bgMain}`}>
+    <div className={`min-h-screen font-sans transition-colors duration-200 md:flex ${bgMain}`}>
       
-      {/* ENCABEZADO */}
-      <header className={`max-w-5xl mx-auto mb-4 flex justify-between items-center p-4 rounded-xl shadow-md ${darkMode ? 'bg-yellow-500 text-gray-950' : 'bg-yellow-400 text-gray-900'}`}>
-        <div className="flex items-center space-x-3">
-          <div 
-            onClick={() => setTab('perfil')}
-            className="w-11 h-11 rounded-full bg-gray-900 text-yellow-400 font-extrabold flex items-center justify-center cursor-pointer overflow-hidden border-2 border-gray-900 shadow-sm"
-          >
-            {usuarioAvatar ? (
-              <img src={usuarioAvatar} alt="Perfil" className="w-full h-full object-cover" />
-            ) : (
-              <span>{usuarioNombre.charAt(0).toUpperCase()}</span>
-            )}
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <h1 className="text-lg sm:text-2xl font-extrabold">🚕 Gestión de Taxis</h1>
-              {esAdmin && (
-                <span className="bg-gray-900 text-yellow-400 font-black text-[10px] px-2 py-0.5 rounded-full uppercase border border-yellow-400 shadow">
-                  👑 SuperAdmin
-                </span>
-              )}
-            </div>
-            <p className="text-xs font-medium opacity-90">
-              Hola, <span className="font-bold">{usuarioNombre}</span>
-            </p>
-          </div>
+      {/* MENÚ LATERAL (COMPUTADOR) */}
+      <aside className="hidden md:flex md:flex-col w-60 shrink-0 sticky top-0 h-screen box-border bg-[#16181D] text-white p-5">
+        <div className="text-xl font-extrabold leading-tight mb-6">
+          Gestión<br /><span className="text-yellow-400">de Taxis</span>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <nav className="flex flex-col gap-1.5">
+          {itemsMenu.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setTab(item.id)}
+              className={`min-h-[44px] px-3.5 rounded-xl text-sm font-semibold text-left transition ${
+                tab === item.id ? 'bg-yellow-400 text-gray-900' : 'text-gray-300 hover:bg-white/10'
+              }`}
+            >
+              {item.largo}
+            </button>
+          ))}
+        </nav>
+
+        <div className="mt-auto pt-4 space-y-2">
+          <button
+            onClick={() => setTab('perfil')}
+            className="flex items-center gap-3 w-full min-h-[44px] text-left"
+          >
+            <div className="w-10 h-10 rounded-full bg-yellow-400 text-gray-900 font-extrabold flex items-center justify-center overflow-hidden shrink-0">
+              {usuarioAvatar ? (
+                <img src={usuarioAvatar} alt="Perfil" className="w-full h-full object-cover" />
+              ) : (
+                <span>{usuarioNombre.charAt(0).toUpperCase()}</span>
+              )}
+            </div>
+            <span className="min-w-0 text-sm">
+              <span className="block text-xs text-gray-400">Hola,</span>
+              <span className="block font-bold truncate">{usuarioNombre}</span>
+            </span>
+          </button>
+
           {esAdmin && (
             <button
               onClick={() => setModoSuperAdminActivo(!modoSuperAdminActivo)}
-              className={`p-2.5 rounded-lg text-xs font-extrabold transition shadow ${
-                modoSuperAdminActivo 
-                  ? 'bg-gray-900 text-green-400 border border-green-500' 
-                  : 'bg-gray-900 text-yellow-400'
+              className={`w-full min-h-[44px] rounded-xl text-xs font-extrabold border transition ${
+                modoSuperAdminActivo ? 'text-green-400 border-green-500' : 'text-yellow-400 border-gray-700'
               }`}
               title="Alternar vista de todos los vehículos o solo los míos"
             >
@@ -1077,67 +1136,76 @@ export default function App() {
             </button>
           )}
 
+          <div className="flex gap-2">
+            <button
+              onClick={toggleDarkMode}
+              className="flex-1 min-h-[44px] rounded-xl text-xs font-bold text-yellow-400 border border-gray-700 hover:bg-white/10 transition"
+            >
+              {darkMode ? 'Modo claro' : 'Modo oscuro'}
+            </button>
+            <button
+              onClick={() => supabase.auth.signOut()}
+              className="flex-1 min-h-[44px] rounded-xl text-xs font-bold text-white border border-gray-700 hover:bg-white/10 transition"
+            >
+              Salir
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <div className="flex-1 min-w-0 p-3 sm:p-6 md:p-8 pb-28 md:pb-8">
+
+      {/* BARRA SUPERIOR (CELULAR) */}
+      <header className="md:hidden max-w-6xl mx-auto mb-4 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-sm font-extrabold">Gestión de Taxis{esAdmin ? ' 👑' : ''}</div>
+          <p className={`text-xs truncate ${textMuted}`}>
+            Hola, <span className="font-bold">{usuarioNombre}</span>
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {esAdmin && (
+            <button
+              onClick={() => setModoSuperAdminActivo(!modoSuperAdminActivo)}
+              className={`min-h-[44px] px-3 rounded-xl text-xs font-extrabold bg-[#16181D] border ${
+                modoSuperAdminActivo ? 'text-green-400 border-green-500' : 'text-yellow-400 border-gray-700'
+              }`}
+            >
+              {modoSuperAdminActivo ? 'Admin: ON' : 'Admin: OFF'}
+            </button>
+          )}
           <button
             onClick={toggleDarkMode}
-            className="bg-gray-900 text-yellow-400 hover:bg-gray-800 p-2.5 rounded-lg text-xs font-bold transition shadow"
+            className="min-h-[44px] px-3 rounded-xl text-xs font-bold bg-[#16181D] text-yellow-400"
           >
-            {darkMode ? '☀️ Claro' : '🌙 Oscuro'}
+            {darkMode ? 'Claro' : 'Oscuro'}
           </button>
-
           <button
             onClick={() => supabase.auth.signOut()}
-            className="bg-gray-900 hover:bg-gray-800 text-white font-bold text-xs px-3 py-2.5 rounded-lg transition"
+            className="min-h-[44px] px-3 rounded-xl text-xs font-bold bg-[#16181D] text-white"
           >
             Salir
           </button>
         </div>
       </header>
 
-      {/* MENÚ DE NAVEGACIÓN (TABS) */}
-      <nav className={`max-w-5xl mx-auto mb-6 flex overflow-x-auto p-1 rounded-xl shadow space-x-1 ${darkMode ? 'bg-gray-900' : 'bg-white'}`}>
-        <button
-          onClick={() => setTab('inicio')}
-          className={`flex-1 py-2 px-3 text-xs sm:text-sm font-bold rounded-lg transition whitespace-nowrap ${
-            tab === 'inicio' ? (darkMode ? 'bg-yellow-500 text-gray-950 shadow-sm' : 'bg-yellow-400 text-gray-900 shadow-sm') : (darkMode ? 'text-gray-400 hover:text-gray-100' : 'text-gray-500 hover:text-gray-900')
-          }`}
-        >
-          📊 Inicio
-        </button>
-        <button
-          onClick={() => setTab('finanzas')}
-          className={`flex-1 py-2 px-3 text-xs sm:text-sm font-bold rounded-lg transition whitespace-nowrap ${
-            tab === 'finanzas' ? (darkMode ? 'bg-yellow-500 text-gray-950 shadow-sm' : 'bg-yellow-400 text-gray-900 shadow-sm') : (darkMode ? 'text-gray-400 hover:text-gray-100' : 'text-gray-500 hover:text-gray-900')
-          }`}
-        >
-          💵 Movimientos
-        </button>
-        <button
-          onClick={() => setTab('flota')}
-          className={`flex-1 py-2 px-3 text-xs sm:text-sm font-bold rounded-lg transition whitespace-nowrap ${
-            tab === 'flota' ? (darkMode ? 'bg-yellow-500 text-gray-950 shadow-sm' : 'bg-yellow-400 text-gray-900 shadow-sm') : (darkMode ? 'text-gray-400 hover:text-gray-100' : 'text-gray-500 hover:text-gray-900')
-          }`}
-        >
-          🚕 Flota
-        </button>
-        <button
-          onClick={() => setTab('documentos')}
-          className={`flex-1 py-2 px-3 text-xs sm:text-sm font-bold rounded-lg transition whitespace-nowrap ${
-            tab === 'documentos' ? (darkMode ? 'bg-yellow-500 text-gray-950 shadow-sm' : 'bg-yellow-400 text-gray-900 shadow-sm') : (darkMode ? 'text-gray-400 hover:text-gray-100' : 'text-gray-500 hover:text-gray-900')
-          }`}
-        >
-          📄 Documentos
-        </button>
-        <button
-          onClick={() => setTab('perfil')}
-          className={`flex-1 py-2 px-3 text-xs sm:text-sm font-bold rounded-lg transition whitespace-nowrap ${
-            tab === 'perfil' ? (darkMode ? 'bg-yellow-500 text-gray-950 shadow-sm' : 'bg-yellow-400 text-gray-900 shadow-sm') : (darkMode ? 'text-gray-400 hover:text-gray-100' : 'text-gray-500 hover:text-gray-900')
-          }`}
-        >
-          👤 Mi Perfil
-        </button>
-      </nav>
+      {/* TÍTULO DE LA PÁGINA */}
+      <div className="max-w-6xl mx-auto mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold">{titulosTab[tab].titulo}</h1>
+          <p className={`text-sm mt-1 ${textMuted}`}>{titulosTab[tab].sub}</p>
+        </div>
+        {tab === 'inicio' && (
+          <button
+            onClick={() => setTab('finanzas')}
+            className="min-h-[44px] px-5 rounded-xl bg-yellow-400 hover:bg-yellow-500 text-gray-900 text-sm font-semibold transition"
+          >
+            Registrar producido
+          </button>
+        )}
+      </div>
 
-      <main className="max-w-5xl mx-auto space-y-6">
+      <main className="max-w-6xl mx-auto space-y-6">
 
         {/* 1. PESTAÑA: INICIO / DASHBOARD PRINCIPAL */}
         {tab === 'inicio' && (
@@ -1166,23 +1234,23 @@ export default function App() {
 
             {/* VISTAS RÁPIDAS (INCLUYENDO GANANCIA TOTAL AÑO) */}
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
-              <div className={`p-4 rounded-xl shadow border-l-4 border-green-500 ${bgCard}`}>
+              <div className={`p-5 rounded-2xl border ${bgCard}`}>
                 <p className={`text-xs font-semibold uppercase ${textMuted}`}>Tarifas Hoy</p>
                 <p className="text-lg sm:text-xl font-bold">${producidoHoy.toLocaleString()}</p>
               </div>
-              <div className={`p-4 rounded-xl shadow border-l-4 border-emerald-600 ${bgCard}`}>
+              <div className={`p-5 rounded-2xl border ${bgCard}`}>
                 <p className={`text-xs font-semibold uppercase ${textMuted}`}>Tarifas Mes Actual</p>
                 <p className="text-lg sm:text-xl font-bold text-emerald-500">${totalProdMesSel.toLocaleString()}</p>
               </div>
-              <div className={`p-4 rounded-xl shadow border-l-4 border-blue-500 ${bgCard}`}>
+              <div className={`p-5 rounded-2xl border ${bgCard}`}>
                 <p className={`text-xs font-semibold uppercase ${textMuted}`}>Ganancia Neta Mes</p>
                 <p className="text-lg sm:text-xl font-bold text-blue-400">${gananciaNetaMesSel.toLocaleString()}</p>
               </div>
-              <div className={`p-4 rounded-xl shadow border-l-4 border-amber-500 ${bgCard}`}>
-                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Ganancia Total Año</p>
-                <p className="text-lg sm:text-xl font-bold text-amber-400">${gananciaTotalAnio.toLocaleString()}</p>
+              <div className="p-5 rounded-2xl border border-gray-800 bg-[#16181D] text-white">
+                <p className="text-xs font-semibold uppercase text-gray-300">Ganancia Total Año</p>
+                <p className="text-lg sm:text-xl font-bold text-yellow-400">${gananciaTotalAnio.toLocaleString()}</p>
               </div>
-              <div className={`p-4 rounded-xl shadow border-l-4 border-red-500 col-span-2 sm:col-span-1 ${bgCard}`}>
+              <div className={`p-5 rounded-2xl border col-span-2 sm:col-span-1 ${bgCard}`}>
                 <p className={`text-xs font-semibold uppercase ${textMuted}`}>Alertas Docs</p>
                 <p className="text-lg sm:text-xl font-bold text-red-500">{alertasCount}</p>
               </div>
@@ -2480,6 +2548,30 @@ export default function App() {
         )}
 
       </main>
+      </div>
+
+      {/* BARRA INFERIOR (CELULAR) */}
+      <nav
+        className={`md:hidden fixed bottom-0 inset-x-0 z-40 flex gap-1 border-t px-1 pt-2 ${darkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-200'}`}
+        style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
+      >
+        {itemsMenu.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => setTab(item.id)}
+            className={`flex-1 min-h-[56px] flex flex-col items-center justify-center gap-0.5 text-xs font-semibold rounded-2xl transition ${
+              tab === item.id
+                ? (darkMode ? 'bg-yellow-500/20 text-yellow-300' : 'bg-[#FBE9A0] text-gray-900')
+                : (darkMode ? 'text-gray-300' : 'text-gray-700')
+            }`}
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              {item.icono}
+            </svg>
+            {item.corto}
+          </button>
+        ))}
+      </nav>
     </div>
   )
 }
