@@ -32,11 +32,9 @@ export default function App() {
   const [documentos, setDocumentos] = useState([])
   const [conductores, setConductores] = useState([])
   
-  // Resumen financiero
+  // Resumen financiero global (hoy y alertas)
   const [producidoHoy, setProducidoHoy] = useState(0)
   const [gastosHoy, setGastosHoy] = useState(0)
-  const [producidoMes, setProducidoMes] = useState(0)
-  const [gastosMes, setGastosMes] = useState(0)
   const [alertasCount, setAlertasCount] = useState(0)
   const [documentosProximosVencer, setDocumentosProximosVencer] = useState([])
 
@@ -123,6 +121,9 @@ export default function App() {
   // Estado para el Calendario de Tarifas (Año y Mes actual)
   const [fechaCalendario, setFechaCalendario] = useState(new Date())
   const [diaSeleccionadoModal, setDiaSeleccionadoModal] = useState(null)
+
+  // Estado para seleccionar el vehículo al exportar PDF ('TODOS' o el ID del vehículo)
+  const [vehiculoFiltroPDF, setVehiculoFiltroPDF] = useState('TODOS')
 
   // Filtros para el historial de mantenimientos
   const [filtroMantenimientoTexto, setFiltroMantenimientoTexto] = useState('')
@@ -251,7 +252,6 @@ export default function App() {
     setDocumentos(documentosValidos)
 
     const hoyStr = obtenerFechaColombia()
-    const mesActualStr = hoyStr.substring(0, 7)
 
     const totalProdHoy = transaccionesValidas
       .filter(t => t.fecha === hoyStr && t.tipo_movimiento === 'producido')
@@ -262,16 +262,6 @@ export default function App() {
       .filter(t => t.fecha === hoyStr && t.tipo_movimiento === 'gasto')
       .reduce((acc, curr) => acc + Number(curr.monto), 0)
     setGastosHoy(totalGastHoy)
-
-    const totalProdMes = transaccionesValidas
-      .filter(t => t.fecha && t.fecha.startsWith(mesActualStr) && t.tipo_movimiento === 'producido')
-      .reduce((acc, curr) => acc + Number(curr.monto), 0)
-    setProducidoMes(totalProdMes)
-
-    const totalGastMes = transaccionesValidas
-      .filter(t => t.fecha && t.fecha.startsWith(mesActualStr) && t.tipo_movimiento === 'gasto')
-      .reduce((acc, curr) => acc + Number(curr.monto), 0)
-    setGastosMes(totalGastMes)
 
     const hoy = new Date()
     let alertas = 0
@@ -594,7 +584,6 @@ export default function App() {
 
     let urlFacturaFinal = ''
 
-    // Subir factura a Supabase Storage si seleccionó un archivo
     if (archivoFactura) {
       const nombreArchivo = `${Date.now()}_${archivoFactura.name.replace(/\s+/g, '_')}`
       const { data: uploadData, error: uploadError } = await supabase.storage
@@ -829,6 +818,29 @@ export default function App() {
   const primerDiaAjustado = primerDiaMes === 0 ? 6 : primerDiaMes - 1
   const totalDiasMes = new Date(añoActualCal, mesActualCal + 1, 0).getDate()
 
+  // Mes seleccionado en el calendario sincronizado con las finanzas
+  const mesSeleccionadoStr = `${añoActualCal}-${String(mesActualCal + 1).padStart(2, '0')}`
+
+  const totalProdMesSel = transacciones
+    .filter(t => t.fecha && t.fecha.startsWith(mesSeleccionadoStr) && t.tipo_movimiento === 'producido')
+    .reduce((acc, curr) => acc + Number(curr.monto), 0)
+
+  const totalGastMesSel = transacciones
+    .filter(t => t.fecha && t.fecha.startsWith(mesSeleccionadoStr) && t.tipo_movimiento === 'gasto')
+    .reduce((acc, curr) => acc + Number(curr.monto), 0)
+
+  const gananciaNetaMesSel = totalProdMesSel - totalGastMesSel
+
+  // Cálculo de la Ganancia Total del Año en curso (Año actual del sistema)
+  const añoEnCursoStr = new Date().getFullYear().toString()
+  const totalProdAnio = transacciones
+    .filter(t => t.fecha && t.fecha.startsWith(añoEnCursoStr) && t.tipo_movimiento === 'producido')
+    .reduce((acc, curr) => acc + Number(curr.monto), 0)
+  const totalGastAnio = transacciones
+    .filter(t => t.fecha && t.fecha.startsWith(añoEnCursoStr) && t.tipo_movimiento === 'gasto')
+    .reduce((acc, curr) => acc + Number(curr.monto), 0)
+  const gananciaTotalAnio = totalProdAnio - totalGastAnio
+
   const producidosPorFechaMap = transacciones
     .filter(t => t.tipo_movimiento === 'producido')
     .reduce((acc, curr) => {
@@ -867,18 +879,145 @@ export default function App() {
     return true
   })
 
-  const hoyStr = obtenerFechaColombia()
-  const mesActualStr = hoyStr.substring(0, 7)
-  const totalMantenimientosMes = transacciones
-    .filter(t => t.tipo_movimiento === 'gasto' && t.fecha && t.fecha.startsWith(mesActualStr))
-    .reduce((acc, curr) => acc + Number(curr.monto), 0)
-
   const mantenimientosPorFecha = mantenimientosFiltrados.reduce((acc, curr) => {
     const f = curr.fecha || 'Sin Fecha'
     if (!acc[f]) acc[f] = []
     acc[f].push(curr)
     return acc
   }, {})
+
+  // Función para exportar el reporte financiero en PDF (Filtrando por mes y opcionalmente por vehículo)
+  function exportarReportePDF() {
+    const mesTexto = nombresMeses[mesActualCal] || 'Mes'
+    const añoTexto = añoActualCal
+
+    // Filtrar transacciones del mes y opcionalmente del vehículo seleccionado
+    let tarifasMes = transacciones.filter(t => t.tipo_movimiento === 'producido' && t.fecha && t.fecha.startsWith(mesSeleccionadoStr))
+    let gastosMesLista = transacciones.filter(t => t.tipo_movimiento === 'gasto' && t.fecha && t.fecha.startsWith(mesSeleccionadoStr))
+
+    if (vehiculoFiltroPDF !== 'TODOS') {
+      tarifasMes = tarifasMes.filter(t => String(t.vehiculo_id) === String(vehiculoFiltroPDF))
+      gastosMesLista = gastosMesLista.filter(g => String(g.vehiculo_id) === String(vehiculoFiltroPDF))
+    }
+
+    const totalProd = tarifasMes.reduce((a, c) => a + Number(c.monto), 0)
+    const totalGast = gastosMesLista.reduce((a, c) => a + Number(c.monto), 0)
+    const gananciaNeta = totalProd - totalGast
+
+    // Obtener subtítulo del vehículo si hay uno seleccionado
+    let subtituloVehiculo = 'Todos los vehículos'
+    if (vehiculoFiltroPDF !== 'TODOS') {
+      const vObj = vehiculos.find(v => String(v.id) === String(vehiculoFiltroPDF))
+      if (vObj) subtituloVehiculo = `Taxi Placa: ${vObj.placa}`
+    }
+
+    const ventana = window.open('', '_blank')
+    ventana.document.write(`
+      <html>
+        <head>
+          <title>Reporte Financiero - ${mesTexto} ${añoTexto}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 30px; color: #111; }
+            .header { text-align: center; border-bottom: 2px solid #eab308; padding-bottom: 15px; margin-bottom: 20px; }
+            .header h1 { margin: 0; font-size: 24px; }
+            .header p { margin: 5px 0 0; color: #666; font-size: 14px; }
+            .summary-box { display: flex; justify-content: space-between; background: #f9fafb; border: 1px solid #e5e7eb; padding: 15px; border-radius: 8px; margin-bottom: 25px; }
+            .stat { text-align: center; flex: 1; }
+            .stat-title { font-size: 11px; text-transform: uppercase; color: #6b7280; font-weight: bold; }
+            .stat-value { font-size: 18px; font-weight: bold; margin-top: 4px; }
+            .green { color: #16a34a; }
+            .red { color: #dc2626; }
+            .blue { color: #2563eb; }
+            h3 { margin-top: 30px; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px; font-size: 15px; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px; }
+            th, td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; }
+            th { background-color: #f3f4f6; font-weight: bold; }
+            .footer { text-align: center; margin-top: 40px; font-size: 11px; color: #9ca3af; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>🚕 Reporte Financiero de Ganancias Netas</h1>
+            <p>Período: <strong>${mesTexto} ${añoTexto}</strong> | Vehículo: <strong>${subtituloVehiculo}</strong> | Usuario: ${usuarioNombre}</p>
+          </div>
+
+          <div class="summary-box">
+            <div class="stat">
+              <div class="stat-title">Total Tarifas</div>
+              <div class="stat-value green">$${totalProd.toLocaleString()}</div>
+            </div>
+            <div class="stat">
+              <div class="stat-title">Total Mantenimientos</div>
+              <div class="stat-value red">$${totalGast.toLocaleString()}</div>
+            </div>
+            <div class="stat">
+              <div class="stat-title">Ganancia Neta</div>
+              <div class="stat-value blue">$${gananciaNeta.toLocaleString()}</div>
+            </div>
+          </div>
+
+          <h3>💵 Detalle de Tarifas (Producido) del Período</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Placa</th>
+                <th>Observaciones</th>
+                <th>Monto</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tarifasMes.length === 0 ? '<tr><td colspan="4" style="text-align:center;">Sin tarifas registradas en este período</td></tr>' : 
+                tarifasMes.map(t => `
+                  <tr>
+                    <td>${t.fecha}</td>
+                    <td>${t.vehiculos?.placa || 'N/A'}</td>
+                    <td>${t.observaciones || 'Tarifa normal'}</td>
+                    <td style="color:#16a34a; font-weight:bold;">+$${Number(t.monto).toLocaleString()}</td>
+                  </tr>
+                `).join('')
+              }
+            </tbody>
+          </table>
+
+          <h3>🛠️ Detalle de Gastos y Mantenimientos del Período</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Placa</th>
+                <th>Categoría</th>
+                <th>Observaciones</th>
+                <th>Monto</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${gastosMesLista.length === 0 ? '<tr><td colspan="5" style="text-align:center;">Sin gastos en este período</td></tr>' : 
+                gastosMesLista.map(g => `
+                  <tr>
+                    <td>${g.fecha}</td>
+                    <td>${g.vehiculos?.placa || 'N/A'}</td>
+                    <td>${g.categoria_gasto || 'Gasto'}</td>
+                    <td>${g.observaciones || '-'}</td>
+                    <td style="color:#dc2626; font-weight:bold;">-$${Number(g.monto).toLocaleString()}</td>
+                  </tr>
+                `).join('')
+              }
+            </tbody>
+          </table>
+
+          <div class="footer">
+            Documento generado automáticamente por Gestión de Taxis - ${obtenerFechaColombia()}
+          </div>
+
+          <script>
+            window.onload = function() { window.print(); }
+          </script>
+        </body>
+      </html>
+    `)
+    ventana.document.close()
+  }
 
   if (!session) return <Auth />
 
@@ -924,7 +1063,6 @@ export default function App() {
         </div>
 
         <div className="flex items-center space-x-2">
-          {/* INTERRUPTOR DE MODO SUPERADMIN */}
           {esAdmin && (
             <button
               onClick={() => setModoSuperAdminActivo(!modoSuperAdminActivo)}
@@ -1026,29 +1164,34 @@ export default function App() {
               </div>
             )}
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+            {/* VISTAS RÁPIDAS (INCLUYENDO GANANCIA TOTAL AÑO) */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
               <div className={`p-4 rounded-xl shadow border-l-4 border-green-500 ${bgCard}`}>
                 <p className={`text-xs font-semibold uppercase ${textMuted}`}>Tarifas Hoy</p>
-                <p className="text-xl sm:text-2xl font-bold">${producidoHoy.toLocaleString()}</p>
+                <p className="text-lg sm:text-xl font-bold">${producidoHoy.toLocaleString()}</p>
               </div>
               <div className={`p-4 rounded-xl shadow border-l-4 border-emerald-600 ${bgCard}`}>
-                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Tarifas Mes</p>
-                <p className="text-xl sm:text-2xl font-bold text-emerald-500">${producidoMes.toLocaleString()}</p>
+                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Tarifas Mes Actual</p>
+                <p className="text-lg sm:text-xl font-bold text-emerald-500">${totalProdMesSel.toLocaleString()}</p>
               </div>
               <div className={`p-4 rounded-xl shadow border-l-4 border-blue-500 ${bgCard}`}>
-                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Ganancia Mes Neta</p>
-                <p className="text-xl sm:text-2xl font-bold text-blue-400">${(producidoMes - gastosMes).toLocaleString()}</p>
+                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Ganancia Neta Mes</p>
+                <p className="text-lg sm:text-xl font-bold text-blue-400">${gananciaNetaMesSel.toLocaleString()}</p>
               </div>
-              <div className={`p-4 rounded-xl shadow border-l-4 border-red-500 ${bgCard}`}>
-                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Alertas Documentos</p>
-                <p className="text-xl sm:text-2xl font-bold text-red-500">{alertasCount}</p>
+              <div className={`p-4 rounded-xl shadow border-l-4 border-amber-500 ${bgCard}`}>
+                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Ganancia Total Año</p>
+                <p className="text-lg sm:text-xl font-bold text-amber-400">${gananciaTotalAnio.toLocaleString()}</p>
+              </div>
+              <div className={`p-4 rounded-xl shadow border-l-4 border-red-500 col-span-2 sm:col-span-1 ${bgCard}`}>
+                <p className={`text-xs font-semibold uppercase ${textMuted}`}>Alertas Docs</p>
+                <p className="text-lg sm:text-xl font-bold text-red-500">{alertasCount}</p>
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className={`p-6 rounded-xl shadow ${bgCard}`}>
                 <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-base font-bold">🚕 Mis Taxis ({vehiculos.length})</h2>
+                  <h2 className="text-base font-bold">Mis Taxis ({vehiculos.length})</h2>
                   <button onClick={() => setTab('flota')} className="text-xs text-yellow-400 font-bold hover:underline">
                     + Gestionar
                   </button>
@@ -1116,6 +1259,30 @@ export default function App() {
         {/* 2. PESTAÑA: FINANZAS Y MOVIMIENTOS */}
         {tab === 'finanzas' && (
           <div className="space-y-6">
+            {/* CONTROLES PARA EXPORTAR PDF */}
+            <div className={`p-4 rounded-xl shadow border flex flex-col sm:flex-row justify-between items-center gap-3 ${bgCard}`}>
+              <div className="flex items-center space-x-2 w-full sm:w-auto">
+                <span className="text-xs font-bold whitespace-hidden sm:whitespace-nowrap">🚕 Filtrar PDF por Taxi:</span>
+                <select
+                  value={vehiculoFiltroPDF}
+                  onChange={(e) => setVehiculoFiltroPDF(e.target.value)}
+                  className={`text-xs font-bold p-2 border rounded-lg outline-none ${selectClass}`}
+                >
+                  <option value="TODOS">Todos los vehículos (Flota)</option>
+                  {vehiculos.map(v => (
+                    <option key={v.id} value={v.id}>Placa: {v.placa}</option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                onClick={exportarReportePDF}
+                className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2.5 rounded-lg text-xs transition flex items-center justify-center space-x-1.5 shadow"
+              >
+                <span>📄 Exportar Reporte PDF del Mes</span>
+              </button>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className={`p-5 rounded-xl shadow border-t-4 border-green-500 ${bgCard}`}>
                 <h2 className="text-base font-bold mb-3">💵 Registrar Tarifa Diaria</h2>
@@ -1254,7 +1421,6 @@ export default function App() {
                     className={inputClass}
                   />
 
-                  {/* SUBIDA DE FOTO DE LA FACTURA */}
                   <div className="space-y-1">
                     <label className="block text-xs font-bold text-gray-400">📸 Factura o Recibo (Opcional)</label>
                     <input
@@ -1275,10 +1441,10 @@ export default function App() {
               </div>
             </div>
 
-            {/* CALENDARIO DE TARIFAS DÍA A DÍA */}
+            {/* CALENDARIO DE TARIFAS Y RESUMEN DEL MES SELECCIONADO */}
             <div className={`p-6 rounded-xl shadow border-t-4 border-green-500 ${bgCard}`}>
               <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-3">
-                <h2 className="text-lg font-bold">📅 Calendario de Tarifas Diarias</h2>
+                <h2 className="text-lg font-bold">📅 Calendario y Resumen de Tarifas</h2>
                 <div className="flex items-center space-x-3">
                   <button
                     onClick={() => cambiarMesCalendario(-1)}
@@ -1298,6 +1464,22 @@ export default function App() {
                 </div>
               </div>
 
+              {/* RESUMEN FINANCIERO DEL MES (SIN RECUADRO GRIS DE FONDO) */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+                <div className="text-center">
+                  <span className={`text-[10px] font-bold uppercase ${textMuted}`}>Total Tarifas ({nombresMeses[mesActualCal]})</span>
+                  <p className="text-lg font-black text-green-500">${totalProdMesSel.toLocaleString()}</p>
+                </div>
+                <div className="text-center">
+                  <span className={`text-[10px] font-bold uppercase ${textMuted}`}>Total Mantenimientos</span>
+                  <p className="text-lg font-black text-red-500">${totalGastMesSel.toLocaleString()}</p>
+                </div>
+                <div className="text-center">
+                  <span className={`text-[10px] font-bold uppercase ${textMuted}`}>Ganancia Neta del Mes</span>
+                  <p className="text-lg font-black text-blue-500">${gananciaNetaMesSel.toLocaleString()}</p>
+                </div>
+              </div>
+
               {/* Leyenda */}
               <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 mb-4 text-xs font-semibold">
                 <div className="flex items-center space-x-2">
@@ -1309,7 +1491,7 @@ export default function App() {
                   <span>Pico y Placa</span>
                 </div>
                 <div className="flex items-center space-x-2">
-                  <span className="w-3 h-3 rounded-full bg-red-500 inline-block shadow"></span>
+                  <span className="w-3 h-3 rounded-full bg-gray-500 inline-block shadow"></span>
                   <span>Sin Trabajar / Sin registro</span>
                 </div>
               </div>
@@ -1342,11 +1524,8 @@ export default function App() {
                   
                   const esDiaPicoYPlaca = registrosDia.some(r => (r.observaciones || '').toLowerCase().includes('pico y placa'))
 
-                  const hoyFechaStr = obtenerFechaColombia()
-                  const esDiaPasadoOActual = fechaStr <= hoyFechaStr
-
-                  let puntoColor = 'bg-gray-600'
-                  let estadoBorde = darkMode ? 'border-gray-800 bg-gray-800/40' : 'border-gray-200 bg-gray-50'
+                  let puntoColor = 'bg-gray-500'
+                  let estadoBorde = darkMode ? 'border-gray-800 bg-gray-900/40' : 'border-gray-200 bg-white'
 
                   if (totalDia > 0) {
                     puntoColor = 'bg-green-500 shadow-green-500/50 shadow-md'
@@ -1354,9 +1533,6 @@ export default function App() {
                   } else if (esDiaPicoYPlaca) {
                     puntoColor = 'bg-blue-500 shadow-blue-500/50 shadow-md'
                     estadoBorde = darkMode ? 'border-blue-800/60 bg-blue-950/30' : 'border-blue-200 bg-blue-50/60'
-                  } else if (esDiaPasadoOActual) {
-                    puntoColor = 'bg-red-500 shadow-red-500/50 shadow-md'
-                    estadoBorde = darkMode ? 'border-red-900/40 bg-red-950/10' : 'border-red-100 bg-red-50/30'
                   }
 
                   return (
@@ -1393,10 +1569,10 @@ export default function App() {
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
                 <div>
                   <h2 className="text-lg font-bold">🛠️ Historial de Mantenimientos y Repuestos</h2>
-                  <p className={`text-xs mt-0.5 ${textMuted}`}>Total invertido este mes: <span className="font-black text-red-400">${totalMantenimientosMes.toLocaleString()}</span></p>
+                  <p className={`text-xs mt-0.5 ${textMuted}`}>Total invertido este mes: <span className="font-black text-red-400">${totalGastMesSel.toLocaleString()}</span></p>
                 </div>
                 <span className="text-xs text-purple-300 font-bold bg-purple-900/50 px-3 py-1.5 rounded-full border border-purple-700 shadow-sm">
-                  Inversión Mes: ${totalMantenimientosMes.toLocaleString()}
+                  Inversión Mes: ${totalGastMesSel.toLocaleString()}
                 </span>
               </div>
 
@@ -1469,7 +1645,6 @@ export default function App() {
                                 </div>
                                 <p className={`italic text-xs ${textMuted}`}>{item.observaciones || 'Sin detalles'}</p>
 
-                                {/* VISUALIZAR / AGREGAR / ELIMINAR FOTO DE LA FACTURA */}
                                 <div className="flex items-center space-x-2 pt-1">
                                   {item.url_factura ? (
                                     <>
@@ -1781,7 +1956,6 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Módulo Compartir Taxi por Correo */}
               <div className="p-4 border rounded-xl bg-blue-950/30 border-blue-800 space-y-2">
                 <h4 className="text-xs font-extrabold text-blue-300 uppercase tracking-wide">🤝 Compartir este taxi con otro usuario</h4>
                 <p className={`text-xs ${textMuted}`}>Ingresa el correo del usuario registrado para darle acceso a ver y gestionar este taxi.</p>
@@ -1804,7 +1978,6 @@ export default function App() {
                 </form>
               </div>
 
-              {/* Balance Financiero Específico del Vehículo */}
               {(() => {
                 const prodVehiculo = transacciones
                   .filter(t => t.vehiculo_id === vehiculoDetalle.id && t.tipo_movimiento === 'producido')
