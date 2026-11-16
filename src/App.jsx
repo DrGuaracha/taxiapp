@@ -221,6 +221,9 @@ export default function App() {
       .filter(Boolean)
       .map(v => ({ ...v, esCompartidoConmigo: true }))
 
+    // IDs de los taxis que realmente me compartieron (para no mezclar los del modo SuperAdmin)
+    const idsCompartidos = new Set(listaVehiculosCompartidos.map(v => v.id))
+
     // Unificar vehículos en un mapa para no tener duplicados
     const mapaVehiculos = new Map()
 
@@ -244,10 +247,12 @@ export default function App() {
 
     const todosLosVehiculos = Array.from(mapaVehiculos.values())
     
-    // Filtro con el interruptor de SuperAdmin
+    // Filtro corregido: incluye propios, compartidos conmigo, o todos si el SuperAdmin está activo
     const vVisibles = (esAdmin && modoSuperAdminActivo)
       ? todosLosVehiculos.filter(v => !vehiculosOcultosAdmin.includes(v.id))
-      : todosLosVehiculos.filter(v => v.usuario_id === session.user.id && !vehiculosOcultosAdmin.includes(v.id))
+      : todosLosVehiculos.filter(
+          v => (v.usuario_id === session.user.id || (v.esCompartidoConmigo && idsCompartidos.has(v.id))) && !vehiculosOcultosAdmin.includes(v.id)
+        )
     
     setVehiculos(vVisibles)
 
